@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multimodal AI Knowledge Assistant</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Marked for Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  
+  <!-- DOMPurify for XSS sanitation -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    /* Custom Markdown styling */
+    .prose table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      font-size: 0.875rem;
+    }
+    .prose th, .prose td {
+      border: 1px solid #374151;
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+    }
+    .prose th {
+      background-color: #1f2937;
+      font-weight: 600;
+      color: #93c5fd;
+    }
+    .prose tr:nth-child(even) {
+      background-color: #111827;
+    }
+    .prose tr:nth-child(odd) {
+      background-color: #182234;
+    }
+    .prose pre {
+      background-color: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 0.5rem;
+      padding: 0.75rem 1rem;
+      overflow-x: auto;
+      margin: 0.75rem 0;
+    }
+    .prose code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      color: #38bdf8;
+      font-size: 0.85em;
+    }
+    .prose ul {
+      list-style-type: disc;
+      margin-left: 1.5rem;
+      margin-top: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .prose ol {
+      list-style-type: decimal;
+      margin-left: 1.5rem;
+      margin-top: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .prose p {
+      margin-top: 0.5rem;
+      margin-bottom: 0.5rem;
+      line-height: 1.6;
+    }
+    .prose h1, .prose h2, .prose h3 {
+      font-weight: 700;
+      color: #f3f4f6;
+      margin-top: 1rem;
+      margin-bottom: 0.5rem;
+    }
+    .prose h1 { font-size: 1.35rem; }
+    .prose h2 { font-size: 1.2rem; }
+    .prose h3 { font-size: 1.05rem; }
+    .prose blockquote {
+      border-left: 4px solid #3b82f6;
+      padding-left: 1rem;
+      color: #9ca3af;
+      margin: 0.75rem 0;
+    }
+    /* Scrollbar styling */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-blue-600 selection:text-white">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-20 px-4 lg:px-8 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+        <i data-lucide="brain" class="w-5 h-5 text-white"></i>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="font-bold text-base lg:text-lg tracking-tight text-white">Multimodal AI Assistant</h1>
+          <span class="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">pgvector</span>
+        </div>
+        <p class="text-xs text-slate-400">Agentic RAG over Word Docs, Markdown Tables & Architecture Diagrams</p>
+      </div>
+    </div>
+
+    <!-- Header Actions & Status -->
+    <div class="flex items-center gap-3">
+      <div id="statusBadge" class="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span id="statusText">Connected</span>
+      </div>
+
+      <a href="/docs" target="_blank" class="text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 border border-slate-700">
+        <i data-lucide="book-open" class="w-3.5 h-3.5"></i>
+        <span>API Docs</span>
+      </a>
+
+      <button id="clearCacheBtn" title="Flush Caches (L1 & L2)" class="text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 border border-slate-700">
+        <i data-lucide="zap-off" class="w-3.5 h-3.5 text-amber-400"></i>
+        <span class="hidden md:inline">Flush Cache</span>
+      </button>
+
+      <button id="clearBtn" title="Clear Conversation" class="text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 border border-slate-700">
+        <i data-lucide="trash-2" class="w-3.5 h-3.5 text-rose-400"></i>
+        <span class="hidden md:inline">Clear</span>
+      </button>
+
+      <button id="reindexBtn" title="Re-index Document" class="text-xs font-medium px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-1.5 shadow-sm">
+        <i data-lucide="refresh-cw" class="w-3.5 h-3.5" id="reindexIcon"></i>
+        <span class="hidden md:inline">Re-index</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Chat Container -->
+  <main class="flex-1 max-w-5xl w-full mx-auto p-4 lg:p-6 flex flex-col">
+    
+    <!-- Messages Scroll Area -->
+    <div id="chatMessages" class="flex-1 space-y-6 pb-6 overflow-y-auto">
+      
+      <!-- Welcome Hero Card -->
+      <div id="welcomeHero" class="bg-gradient-to-b from-slate-900 to-slate-900/60 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center my-6 shadow-xl">
+        <div class="w-14 h-14 mx-auto rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-4">
+          <i data-lucide="sparkles" class="w-7 h-7"></i>
+        </div>
+        <h2 class="text-xl sm:text-2xl font-bold text-white mb-2">How can I assist you with the AI Notes today?</h2>
+        <p class="text-sm text-slate-400 max-w-xl mx-auto mb-6">
+          I can synthesize facts from your notes, analyze structured model comparison tables, and retrieve technical architecture diagrams.
+        </p>
+
+        <!-- Suggested Prompt Pills -->
+        <div class="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto">
+          <button onclick="sendPrompt('What is vibe coding?')" class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
+            <span>💻</span>
+            <span>What is vibe coding?</span>
+          </button>
+          <button onclick="sendPrompt('Compare RAG vs Fine-Tuning in terms of Cost and Data Recency')" class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
+            <span>📊</span>
+            <span>Compare RAG vs Fine-Tuning</span>
+          </button>
+          <button onclick="sendPrompt('Explain the HyDE architecture diagram and how it works')" class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
+            <span>🖼️</span>
+            <span>HyDE architecture diagram</span>
+          </button>
+          <button onclick="sendPrompt('What are the main topics covered in this document?')" class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
+            <span>📚</span>
+            <span>Main topics overview</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Thinking / Loading Indicator (Hidden by default) -->
+    <div id="thinkingIndicator" class="hidden mb-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-xs w-fit">
+      <div class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style="animation-delay: 0ms;"></span>
+        <span class="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style="animation-delay: 150ms;"></span>
+        <span class="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style="animation-delay: 300ms;"></span>
+      </div>
+      <span id="thinkingText">Searching PostgreSQL vectors & reasoning...</span>
+    </div>
+
+    <!-- Chat Input Form -->
+    <div class="sticky bottom-0 bg-slate-950 pt-2 pb-1">
+      <form id="chatForm" class="relative bg-slate-900 border border-slate-800 focus-within:border-blue-500 rounded-2xl shadow-2xl transition duration-200">
+        <textarea
+          id="userInput"
+          rows="1"
+          placeholder="Ask a question about AI notes, models, tables, or diagrams... (Shift+Enter for new line)"
+          class="w-full bg-transparent px-4 py-3.5 pr-14 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none max-h-40"
+        ></textarea>
+        <button
+          type="submit"
+          id="sendBtn"
+          class="absolute right-2.5 bottom-2.5 p-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:hover:bg-blue-600 transition shadow-md shadow-blue-600/30"
+        >
+          <i data-lucide="arrow-up" class="w-4 h-4"></i>
+        </button>
+      </form>
+      <div class="flex items-center justify-between text-[11px] text-slate-500 px-3 pt-2">
+        <span>Grounded strictly on <strong class="text-slate-400">AI-Notes.docx</strong></span>
+        <span>Powered by Groq & PostgreSQL pgvector</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- Image Lightbox Modal -->
+  <div id="imageModal" class="fixed inset-0 z-50 bg-black/90 backdrop-blur-md hidden flex items-center justify-center p-4">
+    <div class="relative max-w-4xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900">
+        <div class="flex items-center gap-2">
+          <i data-lucide="image" class="w-4 h-4 text-blue-400"></i>
+          <span id="modalTitle" class="text-sm font-semibold text-white truncate max-w-lg">Diagram Preview</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <a id="modalOpenTab" href="#" target="_blank" class="text-xs px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center gap-1 border border-slate-700">
+            <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+            <span>Full Size</span>
+          </a>
+          <button onclick="closeModal()" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
+            <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+        </div>
+      </div>
+      <!-- Modal Image View -->
+      <div class="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-950">
+        <img id="modalImg" src="" alt="Diagram" class="max-h-[75vh] w-auto object-contain rounded-lg shadow-lg">
+      </div>
+    </div>
+  </div>
+
+  <script>
+    lucide.createIcons();
+
+    // DOM Elements
+    const chatMessages = document.getElementById("chatMessages");
+    const chatForm = document.getElementById("chatForm");
+    const userInput = document.getElementById("userInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const thinkingIndicator = document.getElementById("thinkingIndicator");
+    const welcomeHero = document.getElementById("welcomeHero");
+    const clearBtn = document.getElementById("clearBtn");
+    const reindexBtn = document.getElementById("reindexBtn");
+    const statusText = document.getElementById("statusText");
+
+    // Modal Elements
+    const imageModal = document.getElementById("imageModal");
+    const modalImg = document.getElementById("modalImg");
+    const modalTitle = document.getElementById("modalTitle");
+    const modalOpenTab = document.getElementById("modalOpenTab");
+
+    // Auto-resize textarea
+    userInput.addEventListener("input", function() {
+      this.style.height = "auto";
+      this.style.height = (this.scrollHeight) + "px";
+    });
+
+    // Enter to submit (Shift+Enter for newline)
+    userInput.addEventListener("keydown", function(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.dispatchEvent(new Event("submit"));
+      }
+    });
+
+    // Quick prompt sender
+    window.sendPrompt = function(promptText) {
+      userInput.value = promptText;
+      userInput.style.height = "auto";
+      chatForm.dispatchEvent(new Event("submit"));
+    };
+
+    // Load initial health / collection status
+    async function loadStats() {
+      try {
+        const res = await fetch("/api/health");
+        if (res.ok) {
+          const data = await res.json();
+          const l1Hits = data.cache?.l1_in_memory?.hits || 0;
+          const l2Hits = data.cache?.l2_pgvector?.total_hits || 0;
+          const totalHits = l1Hits + l2Hits;
+          statusText.textContent = `${data.total_vectors || 414} chunks indexed | ${totalHits} cache hits`;
+        }
+      } catch (e) {
+        statusText.textContent = "pgvector connected";
+      }
+    }
+    loadStats();
+
+    // Flush Cache action
+    const clearCacheBtn = document.getElementById("clearCacheBtn");
+    if (clearCacheBtn) {
+      clearCacheBtn.addEventListener("click", async () => {
+        if (!confirm("Flush both In-Memory (L1) and PostgreSQL pgvector (L2) caches?")) return;
+        try {
+          const res = await fetch("/api/cache/clear", { method: "POST" });
+          const data = await res.json();
+          alert("All caches flushed successfully!");
+          loadStats();
+        } catch (err) {
+          alert("Failed to flush cache: " + err);
+        }
+      });
+    }
+
+    // Clear chat
+    clearBtn.addEventListener("click", () => {
+      chatMessages.innerHTML = "";
+      if (welcomeHero) {
+        chatMessages.appendChild(welcomeHero);
+      }
+      lucide.createIcons();
+    });
+
+    // Re-index action
+    reindexBtn.addEventListener("click", async () => {
+      if (!confirm("Re-index AI-Notes.docx into PostgreSQL? This will re-parse text, tables, and images.")) return;
+      
+      const icon = document.getElementById("reindexIcon");
+      icon.classList.add("animate-spin");
+      reindexBtn.disabled = true;
+
+      try {
+        const res = await fetch("/api/reindex", { method: "POST" });
+        const data = await res.json();
+        alert(`Re-index complete! ${data.total_vectors} chunks in PostgreSQL.`);
+        loadStats();
+      } catch (err) {
+        alert("Failed to re-index: " + err);
+      } finally {
+        icon.classList.remove("animate-spin");
+        reindexBtn.disabled = false;
+      }
+    });
+
+    // Form submit handler
+    chatForm.addEventListener("submit", async function(e) {
+      e.preventDefault();
+      const question = userInput.value.trim();
+      if (!question) return;
+
+      // Remove welcome hero on first message
+      if (welcomeHero && welcomeHero.parentNode) {
+        welcomeHero.remove();
+      }
+
+      // Append User Message
+      appendMessage("user", question);
+      userInput.value = "";
+      userInput.style.height = "auto";
+      sendBtn.disabled = true;
+
+      // Show thinking indicator
+      thinkingIndicator.classList.remove("hidden");
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+
+      try {
+        const response = await fetch("/api/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: question })
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData.detail || `Server returned ${response.status}`);
+        }
+
+        const data = await response.json();
+        appendMessage("assistant", data.answer, data.images, {
+          cached: data.cached,
+          cache_tier: data.cache_tier,
+          similarity: data.similarity
+        });
+        loadStats();
+      } catch (err) {
+        appendMessage("assistant", `⚠️ **Error:** ${err.message}`);
+      } finally {
+        thinkingIndicator.classList.add("hidden");
+        sendBtn.disabled = false;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      }
+    });
+
+    // Render message into chat
+    function appendMessage(sender, text, images = [], cacheInfo = null) {
+      const msgDiv = document.createElement("div");
+      msgDiv.className = "flex gap-3 text-sm";
+
+      if (sender === "user") {
+        msgDiv.className += " justify-end";
+        msgDiv.innerHTML = `
+          <div class="max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 bg-blue-600 text-white shadow-md">
+            <p class="whitespace-pre-wrap">${escapeHtml(text)}</p>
+          </div>
+        `;
+      } else {
+        // Assistant Message
+        const rawHtml = marked.parse(text);
+        const cleanHtml = DOMPurify.sanitize(rawHtml);
+
+        // Render Cache Badge if hit
+        let cacheBadge = "";
+        if (cacheInfo && cacheInfo.cached) {
+          if (cacheInfo.cache_tier === "in_memory") {
+            cacheBadge = `
+              <div class="mb-2">
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 shadow-sm">
+                  <i data-lucide="zap" class="w-3 h-3 text-amber-400"></i>
+                  <span>Instant Match (In-Memory Cache)</span>
+                </span>
+              </div>
+            `;
+          } else if (cacheInfo.cache_tier === "pgvector") {
+            const pct = Math.round((cacheInfo.similarity || 0.95) * 100);
+            cacheBadge = `
+              <div class="mb-2">
+                <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-purple-950/80 text-purple-300 border border-purple-800/60 shadow-sm">
+                  <i data-lucide="sparkles" class="w-3 h-3 text-purple-400"></i>
+                  <span>Semantic Match (pgvector ${pct}% similarity)</span>
+                </span>
+              </div>
+            `;
+          }
+        }
+
+        let imagesHtml = "";
+        if (images && images.length > 0) {
+          imagesHtml = `
+            <div class="mt-4 pt-3 border-t border-slate-800">
+              <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-400 mb-2.5">
+                <i data-lucide="image" class="w-3.5 h-3.5 text-blue-400"></i>
+                <span>Retrieved Architecture Diagrams & Figures (${images.length}):</span>
+              </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                ${images.map(img => `
+                  <div onclick="openModal('${img.url}', '${escapeHtml(img.section || img.filename)}')" 
+                       class="group cursor-pointer rounded-xl bg-slate-950 border border-slate-800 hover:border-blue-500/50 overflow-hidden transition shadow-sm">
+                    <div class="h-32 bg-slate-900/60 flex items-center justify-center overflow-hidden p-2">
+                      <img src="${img.url}" alt="${img.filename}" class="h-full w-full object-contain group-hover:scale-105 transition duration-200">
+                    </div>
+                    <div class="p-2.5 bg-slate-900 border-t border-slate-800/80">
+                      <p class="text-[11px] font-medium text-slate-300 truncate">${escapeHtml(img.section || img.filename)}</p>
+                      <span class="text-[10px] text-blue-400 flex items-center gap-1 mt-0.5">
+                        <i data-lucide="zoom-in" class="w-3 h-3"></i> Click to enlarge
+                      </span>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          `;
+        }
+
+        msgDiv.innerHTML = `
+          <div class="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0 mt-0.5">
+            <i data-lucide="bot" class="w-4 h-4"></i>
+          </div>
+          <div class="flex-1 max-w-[90%] bg-slate-900 border border-slate-800/90 rounded-2xl px-5 py-4 shadow-md">
+            ${cacheBadge}
+            <div class="prose text-slate-200">${cleanHtml}</div>
+            ${imagesHtml}
+          </div>
+        `;
+      }
+
+      chatMessages.appendChild(msgDiv);
+      lucide.createIcons();
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // Modal Functions
+    window.openModal = function(imgUrl, title) {
+      modalImg.src = imgUrl;
+      modalTitle.textContent = title;
+      modalOpenTab.href = imgUrl;
+      imageModal.classList.remove("hidden");
+    };
+
+    window.closeModal = function() {
+      imageModal.classList.add("hidden");
+      modalImg.src = "";
+    };
+
+    imageModal.addEventListener("click", function(e) {
+      if (e.target === imageModal) {
+        closeModal();
+      }
+    });
+
+    document.addEventListener("keydown", function(e) {
+      if (e.key === "Escape" && !imageModal.classList.contains("hidden")) {
+        closeModal();
+      }
+    });
+
+    function escapeHtml(string) {
+      const div = document.createElement("div");
+      div.innerText = string;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

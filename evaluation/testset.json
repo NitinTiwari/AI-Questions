@@ -1,0 +1,14 @@
+[
+  {
+    "question": "What is this document about?",
+    "ground_truth": "This document contains the list of AI related topics and their details."
+  },
+  {
+    "question": "What is AI",
+    "ground_truth": "Artificial intelligence (AI) is intelligence demonstrated by machines, as opposed to the natural intelligence displayed by animals and humans. AI research has been defined as the field of study of “intelligent agents”: any device that perceives its environment and takes actions that maximize its chance of successfully achieving its goals."
+  },
+  {
+    "question": "WHAT IS vibe coding?",
+    "ground_truth": "“Vibe coding” is a software‑development approach in which you create an application entirely with plain‑language (natural‑language) prompts, while an AI agent takes care of the underlying code architecture, syntax, and execution. The developer describes the desired features, the AI generates the code, and the cycle of describe → generate → test → refine is repeated until the app works."
+  }
+]

@@ -1,0 +1,254 @@
+{
+  "image_01.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > How LLM works'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_01.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > How LLM works",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_01.png"
+  },
+  "image_02.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Next word predictions:'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_02.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Next word predictions:",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_02.png"
+  },
+  "image_03.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Next word predictions: > 3. Positional Encoding (Tracking Word Order)'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_03.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Next word predictions: > 3. Positional Encoding (Tracking Word Order)",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_03.png"
+  },
+  "image_04.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > The Superpower: Self-Attention (In Simple Words)'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_04.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > The Superpower: Self-Attention (In Simple Words)",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_04.png"
+  },
+  "image_05.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > How the Brain is Structured: Multi-Head Attention'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_05.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > How the Brain is Structured: Multi-Head Attention",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_05.png"
+  },
+  "image_06.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > How the Brain is Structured: Multi-Head Attention'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_06.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > How the Brain is Structured: Multi-Head Attention",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_06.png"
+  },
+  "image_07.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > The Multi-Layer Network (Stacking the Brain)'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_07.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > The Multi-Layer Network (Stacking the Brain)",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_07.png"
+  },
+  "image_08.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > The Multi-Layer Network (Stacking the Brain)'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_08.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > The Multi-Layer Network (Stacking the Brain)",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_08.png"
+  },
+  "image_09.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > The Multi-Layer Network (Stacking the Brain)'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_09.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Next word predictions: > The Transformer (The Core Brain & Context Engine) > The Multi-Layer Network (Stacking the Brain)",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_09.png"
+  },
+  "image_10.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Temperature'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_10.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Temperature",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_10.png"
+  },
+  "image_11.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Context window constraint'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_11.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Context window constraint",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_11.png"
+  },
+  "image_12.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > LLM API call'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_12.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > LLM API call",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_12.png"
+  },
+  "image_13.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Text-based flowchart showing how a prompt moves through these steps'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_13.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Text-based flowchart showing how a prompt moves through these steps",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_13.png"
+  },
+  "image_14.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Text-based flowchart showing how a prompt moves through these steps'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_14.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Text-based flowchart showing how a prompt moves through these steps",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_14.png"
+  },
+  "image_15.png": {
+    "caption": "Technical diagram or visual illustration in section 'Large Language Models (LLMs) > Fine-Tuning > Fine-Tuning vs. Context Engineering'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_15.png from AI-Notes.docx.",
+    "section": "Large Language Models (LLMs) > Fine-Tuning > Fine-Tuning vs. Context Engineering",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_15.png"
+  },
+  "image_16.png": {
+    "caption": "Technical diagram or visual illustration in section 'Agentic AI (Autonomous Agents) > Agentic memory'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_16.png from AI-Notes.docx.",
+    "section": "Agentic AI (Autonomous Agents) > Agentic memory",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_16.png"
+  },
+  "image_17.png": {
+    "caption": "Technical diagram or visual illustration in section 'Agentic AI (Autonomous Agents) > Agentic memory > 1.Context Memory (The \"Immediate Focus\")'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_17.png from AI-Notes.docx.",
+    "section": "Agentic AI (Autonomous Agents) > Agentic memory > 1.Context Memory (The \"Immediate Focus\")",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_17.png"
+  },
+  "image_18.png": {
+    "caption": "Technical diagram or visual illustration in section 'Agentic AI (Autonomous Agents) > ReRanking`'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_18.png from AI-Notes.docx.",
+    "section": "Agentic AI (Autonomous Agents) > ReRanking`",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_18.png"
+  },
+  "image_19.png": {
+    "caption": "Technical diagram or visual illustration in section 'Model Context Protocol (MCP) > The 3 Core Primitives of an MCP Server'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_19.png from AI-Notes.docx.",
+    "section": "Model Context Protocol (MCP) > The 3 Core Primitives of an MCP Server",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_19.png"
+  },
+  "image_20.png": {
+    "caption": "Technical diagram or visual illustration in section 'RAG > The Three-Step RAG Workflow'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_20.png from AI-Notes.docx.",
+    "section": "RAG > The Three-Step RAG Workflow",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_20.png"
+  },
+  "image_21.png": {
+    "caption": "Technical diagram or visual illustration in section 'RAG > Vector > Vector Search Algorithm > 2.1. HNSW (Hierarchical Navigable Small World)'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_21.png from AI-Notes.docx.",
+    "section": "RAG > Vector > Vector Search Algorithm > 2.1. HNSW (Hierarchical Navigable Small World)",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_21.png"
+  },
+  "image_22.png": {
+    "caption": "Technical diagram or visual illustration in section 'RAG > Vector > Vector Search Algorithm > 2.1. HNSW (Hierarchical Navigable Small World)'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_22.png from AI-Notes.docx.",
+    "section": "RAG > Vector > Vector Search Algorithm > 2.1. HNSW (Hierarchical Navigable Small World)",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_22.png"
+  },
+  "image_23.png": {
+    "caption": "Technical diagram or visual illustration in section 'RAG > Vector > Vector Search Algorithm > 2.2 How HNSW Builds the Graph'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_23.png from AI-Notes.docx.",
+    "section": "RAG > Vector > Vector Search Algorithm > 2.2 How HNSW Builds the Graph",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_23.png"
+  },
+  "image_24.png": {
+    "caption": "Technical diagram or visual illustration in section 'RAG > Vector > Vector Search Algorithm > 4. Dot Product'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_24.png from AI-Notes.docx.",
+    "section": "RAG > Vector > Vector Search Algorithm > 4. Dot Product",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_24.png"
+  },
+  "image_25.png": {
+    "caption": "Technical diagram or visual illustration in section 'Advanced RAG (Retrieval techniques) > HyDE (Hypothetical Document Embeddings) > How HyDE works step by step'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_25.png from AI-Notes.docx.",
+    "section": "Advanced RAG (Retrieval techniques) > HyDE (Hypothetical Document Embeddings) > How HyDE works step by step",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_25.png"
+  },
+  "image_26.png": {
+    "caption": "Technical diagram or visual illustration in section 'Advanced RAG (Retrieval techniques) > HyDE (Hypothetical Document Embeddings) > Why searching with a fake answer works better'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_26.png from AI-Notes.docx.",
+    "section": "Advanced RAG (Retrieval techniques) > HyDE (Hypothetical Document Embeddings) > Why searching with a fake answer works better",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_26.png"
+  },
+  "image_27.png": {
+    "caption": "Technical diagram or visual illustration in section 'Design and Architecture > Modern Agentic Design Patterns > Hybrid Approach'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_27.png from AI-Notes.docx.",
+    "section": "Design and Architecture > Modern Agentic Design Patterns > Hybrid Approach",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_27.png"
+  },
+  "image_28.png": {
+    "caption": "Technical diagram or visual illustration in section 'Security of an agentic model > LLM Gateways'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_28.png from AI-Notes.docx.",
+    "section": "Security of an agentic model > LLM Gateways",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_28.png"
+  },
+  "image_29.png": {
+    "caption": "Technical diagram or visual illustration in section 'Security of an agentic model > LLM Gateways > GuardRails: > How to Use Guardrails (A Simple Framework) > Guardrails AI Python framework'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_29.png from AI-Notes.docx.",
+    "section": "Security of an agentic model > LLM Gateways > GuardRails: > How to Use Guardrails (A Simple Framework) > Guardrails AI Python framework",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_29.png"
+  },
+  "image_30.png": {
+    "caption": "Technical diagram or visual illustration in section 'Security of an agentic model > Security in a glance'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_30.png from AI-Notes.docx.",
+    "section": "Security of an agentic model > Security in a glance",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_30.png"
+  },
+  "image_31.png": {
+    "caption": "Technical diagram or visual illustration in section 'Data Science'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_31.png from AI-Notes.docx.",
+    "section": "Data Science",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_31.png"
+  },
+  "image_32.png": {
+    "caption": "Technical diagram or visual illustration in section 'Q & A'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_32.png from AI-Notes.docx.",
+    "section": "Q & A",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_32.png"
+  },
+  "image_33.png": {
+    "caption": "Technical diagram or visual illustration in section 'Q & A > Advanced RAG pipeline vs Agentic RAG pipelines > Naïve RAG'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_33.png from AI-Notes.docx.",
+    "section": "Q & A > Advanced RAG pipeline vs Agentic RAG pipelines > Naïve RAG",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_33.png"
+  },
+  "image_34.png": {
+    "caption": "Technical diagram or visual illustration in section 'Q & A > Advanced RAG pipeline vs Agentic RAG pipelines > Advanced RAG'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_34.png from AI-Notes.docx.",
+    "section": "Q & A > Advanced RAG pipeline vs Agentic RAG pipelines > Advanced RAG",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_34.png"
+  },
+  "image_35.png": {
+    "caption": "Technical diagram or visual illustration in section 'Q & A > Advanced RAG pipeline vs Agentic RAG pipelines > Component-level improvements in advanced RAG'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_35.png from AI-Notes.docx.",
+    "section": "Q & A > Advanced RAG pipeline vs Agentic RAG pipelines > Component-level improvements in advanced RAG",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_35.png"
+  },
+  "image_36.png": {
+    "caption": "Technical diagram or visual illustration in section 'Q & A > Advanced RAG pipeline vs Agentic RAG pipelines > Component-level improvements in advanced RAG'. Associated context: Followed by: \"Large Language Models (LLMs)\". Referenced file: image_36.png from AI-Notes.docx.",
+    "section": "Q & A > Advanced RAG pipeline vs Agentic RAG pipelines > Component-level improvements in advanced RAG",
+    "source": "AI-Notes.docx",
+    "method": "context_fallback",
+    "path": "C:\\Users\\hp\\AI\\AI-Questions\\data\\extracted_images\\image_36.png"
+  }
+}

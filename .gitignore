@@ -1,0 +1,21 @@
+# Virtual environment
+.question/
+.venv/
+venv/
+
+# Env secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Vector store (regenerate from source docs instead of committing)
+vectorstore/
+
+# Evaluation outputs
+evaluation/results/*.csv
+
+# OS
+.DS_Store
