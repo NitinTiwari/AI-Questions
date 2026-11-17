@@ -1,540 +1,1607 @@
-================================================================================
+====================================================================================================
 MULTIMODAL AGENTIC RAG OVER WORD DOCUMENTS WITH POSTGRESQL (PGVECTOR)
-COMPREHENSIVE TECHNICAL & ARCHITECTURAL REFERENCE MANUAL
-(Developer & System Design Interviewer Guide)
-================================================================================
-
-TABLE OF CONTENTS
------------------
-1. EXECUTIVE SUMMARY & PROBLEM STATEMENT
-2. SYSTEM ARCHITECTURE & DATA FLOW (ASCII DIAGRAMS)
-3. INGESTION & MULTIMODAL EXTRACTION PIPELINE
-4. STORAGE ENGINE & VECTOR DATABASE DESIGN (POSTGRESQL + PGVECTOR)
-5. 2-TIER HYBRID CACHING SYSTEM (L1 IN-MEMORY + L2 PGVECTOR SEMANTIC)
-6. AGENTIC ORCHESTRATION & TOOL CALLING PATTERN
-7. FASTAPI BACKEND & EMBEDDED UI ARCHITECTURE
-8. EVALUATION & BENCHMARKING (RAGAS)
-9. PRODUCTION DEPLOYMENT & SCALABILITY CONSIDERATIONS
-10. INTERVIEW Q&A BIBLE (DESIGN, ARCHITECTURE, DATABASE, CACHE, AGENT)
-
-
-================================================================================
-1. EXECUTIVE SUMMARY & PROBLEM STATEMENT
-================================================================================
-1.1 Background:
-Enterprise and technical knowledge often resides in rich Microsoft Word (.docx) 
-documents rather than plain text. These documents contain heterogeneous modalities:
-  - Narrative paragraphs with nested hierarchical heading structures.
-  - Multi-column comparison tables (e.g., dense vs. sparse embeddings, RAG vs. fine-tuning).
-  - Technical architecture flowcharts, figures, and system diagrams.
-
-1.2 The Problem with Traditional (Naive) RAG:
-  - Text-only parsers discard tables or split them arbitrarily into uninterpretable rows.
-  - Embedded diagrams and visual workflows are completely ignored.
-  - Lack of document context: chunks lose their parent section breadcrumbs.
-  - High inference latency and token costs: every repeated or paraphrased query hits the LLM.
-  - Rigid query-response pipelines fail when retrieval requires multiple steps.
-
-1.3 The Solution:
-A fully autonomous, Multimodal Agentic RAG system that:
-  - Unified Extraction: Parses text with hierarchical breadcrumbs, converts tables 
-    into clean GitHub-flavored Markdown, and extracts/captions 36 embedded diagrams.
-  - Vector Storage: Manages 414 chunk vectors in PostgreSQL using pgvector (Neon Serverless).
-  - Agentic Reasoning: Employs a tool-calling agent (ChatGroq Qwen 2.5 27B) that queries 
-    the document autonomously, synthesizes answers, and cites sections and diagrams.
-  - 2-Tier Caching: Sub-millisecond exact-match L1 in-memory cache + persistent L2 
-    pgvector semantic cache for paraphrased questions (cosine similarity >= 0.92).
-  - Embedded UI: Single-process FastAPI server hosting an interactive HTML5/Tailwind chat UI 
-    with image modal lightboxes and live cache hit badges.
-
-
-================================================================================
-2. SYSTEM ARCHITECTURE & DATA FLOW (ASCII DIAGRAMS)
-================================================================================
-
-2.1 INGESTION & INDEXING PIPELINE (Offline / Admin Re-index):
-
- +---------------------+
- |  data/AI-Notes.docx |
- +----------+----------+
-            |
-            v
- +-------------------------------------------------------------------------+
- | src/document_loader.py (python-docx)                                    |
- |                                                                         |
- |  [Heading Tracker]   ---> Maintains breadcrumbs: [Context: H1 > H2]     |
- |  [Text Extractor]    ---> Paragraphs bound with active breadcrumbs      |
- |  [Table Extractor]   ---> 24 Tables converted to GitHub Markdown       |
- |  [Image Extractor]   ---> 36 PNGs extracted to data/extracted_images/  |
- +----------+--------------------------------------------------------------+
-            |
-            +------------------------+
-            |                        |
-            v                        v
- +----------------------+  +-----------------------------------------------+
- | Text & Tables        |  | src/image_captioner.py                        |
- |                      |  | - Contextual description synthesis             |
- |                      |  | - Vision API fallback (Groq LLaMA 3.2 Vision) |
- |                      |  | - Caching in data/captions_cache.json         |
- +----------+-----------+  +-----------------------+-----------------------+
-            |                                      |
-            +------------------+-------------------+
-                               |
-                               v
- +-------------------------------------------------------------------------+
- | src/chunker.py                                                          |
- |  - Tables & Images: Kept ATOMIC (never split across chunks)             |
- |  - Text: RecursiveCharacterTextSplitter (chunk_size=1000, overlap=150)  |
- +-----------------------------+-------------------------------------------+
-                               |
-                               v
- +-------------------------------------------------------------------------+
- | src/vector_store.py                                                     |
- |  - Embedding Model: sentence-transformers/all-MiniLM-L6-v2 (384-dim)    |
- |  - Unit Normalization: normalize_embeddings=True                        |
- +-----------------------------+-------------------------------------------+
-                               |
-                               v
- +-------------------------------------------------------------------------+
- | PostgreSQL (Neon Database with pgvector)                                |
- |  - Table: langchain_pg_embedding (414 rows)                             |
- |  - Collection: ai_notes_docs                                            |
- +-------------------------------------------------------------------------+
-
-
-2.2 INFERENCE & QUERY PIPELINE (Runtime):
-
- [User in Web Chat UI / CLI]
-           |
-           | POST /api/ask {"question": "What is HyDE retrieval?"}
-           v
- +-------------------------------------------------------------------------+
- | src/api.py -> ask_question()                                            |
- +-----------------------------------+-------------------------------------+
-                                     |
-                                     v
- +-------------------------------------------------------------------------+
- | src/cache.py -> get_cached_response()                                   |
- |  1. Normalize: "what is hyde retrieval"                                 |
- |  2. L1 (In-Memory TTLCache): Check dictionary hash                      |
- +---------+-------------------------+-------------------------------------+
-           |                         |
-     [L1 HIT < 2ms]            [L1 MISS]
-           |                         |
-           |                         v
-           |       +-------------------------------------------------------+
-           |       | L2 Check: PostgreSQL Semantic Cache (pgvector)        |
-           |       | - Compute query vector (all-MiniLM-L6-v2)             |
-           |       | - Cosine Similarity: 1 - (query_embedding <=> vector)  |
-           |       | - Is Similarity >= 0.92?                              |
-           |       +-----------------+-------------------------------------+
-           |                         |
-           |                   +-----+-----+
-           |                   |           |
-           |             [L2 HIT ~30ms]  [L2 MISS]
-           |                   |           |
-           |                   |           v
-           |                   | +-----------------------------------------+
-           |                   | | src/agent.py (ChatGroq Reasoning Agent) |
-           |                   | | - Model: qwen/qwen3.8-27b               |
-           |                   | | - Decides to call: search_document      |
-           |                   | +--------------------+--------------------+
-           |                   |                      |
-           |                   |                      v
-           |                   | +-----------------------------------------+
-           |                   | | src/tools.py -> search_document()       |
-           |                   | | - Similarity search on pgvector (k=4)   |
-           |                   | | - Formats [Type, Section, Image, Table] |
-           |                   | +--------------------+--------------------+
-           |                   |                      |
-           |                   |                      v
-           |                   | +-----------------------------------------+
-           |                   | | Groq LLM synthesizes grounded answer    |
-           |                   | | + Image matches lookup in vector store  |
-           |                   | +--------------------+--------------------+
-           |                   |                      |
-           |                   |                      v
-           |                   | +-----------------------------------------+
-           |                   | | set_cached_response()                   |
-           |                   | | - Populate L1 (In-Memory)               |
-           |                   | | - Upsert L2 (rag_semantic_cache in PG)  |
-           |                   | +--------------------+--------------------+
-           |                   |                      |
-           +-------------------+----------------------+
-                               |
-                               v
- [FastAPI JSON Response: {question, answer, images, cached, cache_tier, similarity}]
-                               |
-                               v
- [Rendered in Web Chat UI with Markdown Tables, Clickable Lightbox Images, & Cache Badges]
-
-
-================================================================================
-3. INGESTION & MULTIMODAL EXTRACTION PIPELINE
-================================================================================
-
-3.1 Hierarchical Breadcrumb Tracking:
-When reading `.docx` body elements sequentially (paragraphs and tables), headings 
-are tracked using a dynamic stack:
-  - Heading 1 clears existing sub-headings.
-  - Heading 2 nests under Heading 1.
-  - Every paragraph and table inherits `[Context: H1 > H2]`.
-Why this matters:
-A chunk stating "It reduces latency by 40%" is semantically meaningless without context. 
-With breadcrumbs `[Context: Advanced RAG > Semantic Caching]`, the embedding model 
-accurately vectors the passage to caching concepts.
-
-3.2 Markdown Table Preservation:
-Word tables have complex XML structures (`w:tbl`, `w:tr`, `w:tc`).
-`src/document_loader.py` iterates row-by-row and cell-by-cell:
-  - Extracts clean text, stripping newlines within cells.
-  - Converts into GitHub-flavored Markdown:
-      | Metric | Dense Embedding | Sparse Embedding |
-      | --- | --- | --- |
-      | Latency | 45ms | 12ms |
-  - Attaches metadata: `type="table"`, `table_index=N`, `section=breadcrumbs`.
-  - Ensures the table is NEVER fractured by text splitters.
-
-3.3 Embedded Diagram Extraction & Captioning:
-  - Traverses `w:drawing` and `w:pict` tags in docx XML.
-  - Extracts raw binary streams into `data/extracted_images/image_01.png` .. `image_36.png`.
-  - Generates descriptive semantic captions combining:
-      1. Immediate surrounding paragraph context.
-      2. Active heading breadcrumb.
-      3. Vision LLM (`llama-3.2-11b-vision-preview` via Groq) when configured.
-  - Persists captions in `data/captions_cache.json` to prevent repeated vision API calls.
-  - Ingests image captions into pgvector as `type="image"`, `image_path="data/extracted_images/image_XX.png"`.
-
-3.4 Chunking Policy (`src/chunker.py`):
-  - Tables: Chunk size is ignored. Entire Markdown table is kept atomic.
-  - Images: Captioned image metadata is kept atomic.
-  - Standard Text: Chunked with `RecursiveCharacterTextSplitter`:
-      chunk_size = 1000 characters (~200-250 tokens)
-      chunk_overlap = 150 characters (~30-40 tokens)
-      separators = ["\n\n", "\n", ". ", " ", ""]
-  - Total chunks produced from `AI-Notes.docx`: 414 documents.
-
-
-================================================================================
-4. STORAGE ENGINE & VECTOR DATABASE DESIGN (POSTGRESQL + PGVECTOR)
-================================================================================
-
-4.1 Database Infrastructure:
-  - Engine: PostgreSQL 16 on Neon Serverless (AWS us-east-1).
-  - Extension: `CREATE EXTENSION IF NOT EXISTS vector;`
-  - Client Driver: `psycopg2` / `psycopg3` pooled via `SQLAlchemy`.
-
-4.2 Document Collection Schema (`langchain-postgres`):
-  Table: `langchain_pg_collection`
-    - uuid: UUID PRIMARY KEY
-    - name: VARCHAR (e.g., 'ai_notes_docs')
-    - cmetadata: JSONB
-
-  Table: `langchain_pg_embedding`
-    - id: VARCHAR PRIMARY KEY
-    - collection_id: UUID REFERENCES langchain_pg_collection(uuid) ON DELETE CASCADE
-    - embedding: vector(384)
-    - document: TEXT (passage content, markdown table, or diagram caption)
-    - cmetadata: JSONB (stores {"type": "text"|"table"|"image", "section": "...", "image_path": "..."})
-
-4.3 Vector Distance Metric & Dimension Selection:
-  - Model: `sentence-transformers/all-MiniLM-L6-v2` produces dense vectors of dimension $d = 384$.
-  - Distance Metric: Cosine Distance (`<=>`).
-    Why Cosine over L2/Euclidean?
-    Text document passages vary in word count. Cosine similarity evaluates the angle 
-    between vectors, ignoring length magnitude. All vectors are unit-normalized ($\|v\|_2 = 1$).
-    In pgvector:
-      Cosine Distance = $1 - \cos(\theta) = 1 - \frac{u \cdot v}{\|u\| \|v\|}$
-      Cosine Similarity = $1 - (u \Leftrightarrow v)$
-
-4.4 Indexing Optimization (HNSW):
-  Hierarchical Navigable Small World (HNSW) index constructed on vector columns:
-    CREATE INDEX idx_embedding_vector ON langchain_pg_embedding 
-    USING hnsw (embedding vector_cosine_ops);
-  Provides sub-10ms approximate nearest neighbor (ANN) search over millions of vectors.
-
-
-================================================================================
-5. 2-TIER HYBRID CACHING SYSTEM (L1 IN-MEMORY + L2 PGVECTOR SEMANTIC)
-================================================================================
-
-5.1 Motivation:
-  In document RAG, users frequently ask:
-    a) Identical questions ("What is vibe coding?")
-    b) Paraphrased variations ("Explain vibe coding to me", "Tell me about vibe coding")
-  Running an LLM tool-calling agent every time incurs ~2.5s latency and consumes Groq tokens.
-
-5.2 Tier 1: In-Memory LRU + TTL Cache (L1):
-  - Class: `ThreadSafeTTLCache` in `src/cache.py`.
-  - Structure: Python `OrderedDict` guarded by `threading.Lock`.
-  - Eviction: Least Recently Used (LRU) when `len >= CACHE_L1_MAXSIZE` (default: 500).
-  - Expiration: Per-item TTL check (default: 7200 seconds / 2 hours).
-  - Normalization Key:
-      `normalize_query(q)`: lowercases, strips punctuation, and collapses whitespace.
-      e.g., `"What is HyDE??"` -> `"what is hyde"`
-  - Latency: < 1 millisecond. Zero network, zero database, zero GPU/CPU cost.
-
-5.3 Tier 2: PostgreSQL pgvector Semantic Cache (L2):
-  - Storage Table: `rag_semantic_cache`
-      CREATE TABLE IF NOT EXISTS rag_semantic_cache (
-          id SERIAL PRIMARY KEY,
-          normalized_query TEXT NOT NULL,
-          query_embedding vector(384) NOT NULL,
-          answer TEXT NOT NULL,
-          images JSONB DEFAULT '[]'::jsonb,
-          hit_count INT DEFAULT 1,
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-      );
-      CREATE UNIQUE INDEX uq_rag_semantic_cache_norm_query 
-      ON rag_semantic_cache (normalized_query);
-      CREATE INDEX idx_rag_semantic_cache_vector 
-      ON rag_semantic_cache USING hnsw (query_embedding vector_cosine_ops);
-
-  - Semantic Matching SQL:
-      SELECT id, normalized_query, answer, images,
-             1 - (query_embedding <=> CAST(:embedding AS vector)) AS similarity
-      FROM rag_semantic_cache
-      ORDER BY query_embedding <=> CAST(:embedding AS vector) ASC
-      LIMIT 1;
-
-  - Threshold: `CACHE_SEMANTIC_THRESHOLD` = 0.92.
-    If similarity >= 0.92:
-      - Hit registered!
-      - Increments `hit_count = hit_count + 1`, `updated_at = NOW()`.
-      - Auto-populates L1 memory cache (Self-Healing Promotion).
-      - Returns cached answer and diagram URLs in ~30ms.
-
-5.4 Upsert Strategy:
-  Uses PostgreSQL native `ON CONFLICT (normalized_query) DO UPDATE` to ensure thread-safe 
-  idempotent insertion without duplicate key violations.
-
-5.5 Invalidation Lifecycle:
-  When documents are modified or re-indexed via `POST /api/reindex` or `python -m src.main --rebuild-index`:
-    1. L1 cache is cleared in RAM (`_l1_cache.clear()`).
-    2. L2 cache is wiped in PostgreSQL (`TRUNCATE TABLE rag_semantic_cache;`).
-  Guarantees zero stale responses after document updates.
-
-
-================================================================================
-6. AGENTIC ORCHESTRATION & TOOL CALLING PATTERN
-================================================================================
-
-6.1 Reasoning LLM:
-  - Model: `qwen/qwen3.8-27b` via `ChatGroq`.
-  - Temperature: 0.0 (deterministic, hallucination-resistant reasoning).
-
-6.2 Tool Definitions (`src/tools.py`):
-  - Primary Tool: `search_document(query: str) -> str`
-  - Fallback Alias: `search_function(query: str) -> str`
-    Why the alias?
-    Open-source reasoning models (like Qwen or LLaMA) occasionally hallucinate generic tool 
-    names like `search_function` when tool definitions are presented. Registering both 
-    guarantees seamless execution without API tool-call errors.
-
-6.3 Context Enrichment:
-  When `search_document` retrieves passages, it formats rich structured headers:
-    [Passage 1 | Type: Table | Section: Dense vs Sparse Embeddings | Table #3]
-    | Feature | Dense | Sparse |
-    ...
-  This informs the LLM whether it is looking at text, a data table, or a diagram.
-
-6.4 Prompt Engineering & Grounding Rules:
-  - Strict grounding: Must call `search_document` before answering factual questions.
-  - Multi-hop search: If first search returns partial context, agent can formulate 
-    a second query (e.g., query for definition, then query for trade-offs).
-  - Explicit citations: Must cite section breadcrumbs and source document at the end.
-
-
-================================================================================
-7. FASTAPI BACKEND & EMBEDDED UI ARCHITECTURE
-================================================================================
-
-7.1 Process Model:
-  Single-process unified architecture. FastAPI serves:
-    - HTML5 Single-Page Application at `GET /`
-    - Static diagrams at `GET /images/{filename}`
-    - RESTful API endpoints under `/api/*`
-    - Interactive Swagger documentation at `/docs`
-
-7.2 Lazy Loading of Heavy ML Dependencies:
-  To eliminate cold-start delays:
-    - `torch`, `sentence_transformers`, and `langchain_postgres` are imported lazily 
-      inside query/retrieval functions rather than at global API module scope.
-    - Result: `uvicorn src.api:app` boots in < 300ms, and UI root `GET /` responds 
-      in < 5ms without loading PyTorch weights into memory.
-
-7.3 REST Endpoints Summary:
-  +--------------------+--------+----------------------------------------------------+
-  | Endpoint           | Method | Description                                        |
-  +--------------------+--------+----------------------------------------------------+
-  | /                  | GET    | Serves embedded modern Chat UI (index.html)        |
-  | /images/{filename} | GET    | Serves extracted architecture diagrams (.png)      |
-  | /api/health        | GET    | Health check, total vector count & cache stats     |
-  | /api/ask           | POST   | Full RAG query with 2-tier cache & diagram lookup  |
-  | /api/search        | POST   | Direct vector similarity search endpoint           |
-  | /api/reindex       | POST   | Re-parses docx, rebuilds vectors & flushes caches  |
-  | /api/cache/stats   | GET    | L1/L2 hits, misses, hit rate & entry counts        |
-  | /api/cache/clear   | POST   | Flushes both L1 (RAM) and L2 (pgvector) caches     |
-  +--------------------+--------+----------------------------------------------------+
-
-7.4 Embedded Chat UI Features ([static/index.html]):
-  - Responsive dark-mode interface built with Tailwind CSS.
-  - Marked.js + DOMPurify: Renders Markdown tables, bold text, code blocks, lists safely.
-  - Diagram Gallery & Modal Lightbox: Retrieved diagrams appear as thumbnails below 
-    answers; clicking expands them in a high-resolution modal.
-  - Cache Hit Indicators: Displays visual badges:
-      - "⚡ Instant Match (In-Memory Cache)" (Green)
-      - "✨ Semantic Match (pgvector 98% similarity)" (Purple)
-  - Admin Toolbar: One-click "Flush Cache" and "Re-index" buttons with live spinner states.
-
-
-================================================================================
-8. EVALUATION & BENCHMARKING (RAGAS)
-================================================================================
-
-8.1 Evaluation Framework:
-  Implemented in `evaluation/ragas_eval.py` using the **RAGAS** (Retrieval Augmented 
-  Generation Assessment) framework.
-
-8.2 Key Evaluation Metrics:
-  1. Faithfulness:
-     Measures whether the LLM answer is strictly derived from retrieved context 
-     (detects hallucinations). Target: > 0.90.
-  2. Answer Relevance:
-     Measures whether the generated answer directly addresses the user's prompt 
-     without superfluous fluff. Target: > 0.85.
-  3. Context Precision:
-     Measures whether the ground-truth relevant passage was ranked at top positions 
-     in vector retrieval. Target: > 0.80.
-
-8.3 Ground Truth Dataset:
-  Maintained in `evaluation/testset.json` with multi-modal test cases covering text 
-  definitions, table comparisons, and diagram workflows.
-
-
-================================================================================
-9. PRODUCTION DEPLOYMENT & SCALABILITY CONSIDERATIONS
-================================================================================
-
-9.1 Horizontal Scaling:
-  - The FastAPI app is stateless except for the L1 in-memory cache.
-  - When horizontally scaling across multiple container replicas (e.g., Kubernetes, AWS ECS):
-      - L2 PostgreSQL semantic cache is naturally shared across all replicas.
-      - L1 cache can either remain local per pod (near-zero latency) or be swapped 
-        with a Redis cluster using `aioredis`.
-
-9.2 Database Connection Pooling:
-  - Neon PostgreSQL uses connection pooling (PgBouncer) via port 5432 / pooler endpoints.
-  - SQLAlchemy connection pool configuration handles transient disconnects and SSL renegotiation.
-
-9.3 Security & Sanitation:
-  - All Markdown output rendered in UI is sanitized using `DOMPurify` to prevent stored XSS.
-  - SQL queries use parameterized prepared statements (`sqlalchemy.text` with bound parameters) 
-    to completely prevent SQL injection.
-  - API keys (`GROQ_API_KEY`, `DATABASE_URL`) are isolated in `.env` and never exposed to the client.
-
-
-================================================================================
-10. INTERVIEW Q&A BIBLE (DESIGN, ARCHITECTURE, DATABASE, CACHE, AGENT)
-================================================================================
-
-Q1: Why did you choose an Agentic RAG architecture instead of a Naive RAG pipeline?
-A1: Naive RAG follows a rigid single-step flow: Question -> Embed -> Retrieve top-k -> Generate. 
-This breaks down when:
-  1) The query is ambiguous or multi-faceted (requiring multi-hop search).
-  2) The first retrieval returns irrelevant or insufficient context.
-  3) The question requires reasoning over whether to look at a diagram caption or a table.
-Agentic RAG uses an LLM with tool calling (`search_document`). The agent inspects intermediate 
-retrieval output, evaluates whether it has enough facts, refines its search if necessary, 
-and synthesizes the answer only when grounded.
-
-Q2: How do you handle tables and images in Word documents without losing context?
-A2: 
-- Tables: Rather than letting a standard character text splitter break a 10-row comparison table 
-  into fragments, our loader parses Word XML tables and converts them into GitHub-flavored Markdown. 
-  The chunker treats each table as an atomic unit with its header row and section breadcrumb attached.
-- Images: We extract the raw images from `w:drawing` tags, store them on disk, generate detailed 
-  contextual captions (leveraging surrounding paragraphs, breadcrumbs, and Vision LLM), and embed 
-  the caption with metadata pointing to the image URL (`/images/image_XX.png`). When the agent 
-  retrieves the caption, the frontend presents both the explanation and the interactive image.
-
-Q3: Explain the 2-Tier Caching strategy and why you built both L1 and L2.
-A3:
-- L1 (In-Memory LRU + TTL): Solves exact query redundancy. Normalizes query strings (lowercasing, 
-  stripping punctuation/whitespace). Responds in < 1ms with zero database network calls.
-- L2 (PostgreSQL pgvector Semantic Cache): Solves paraphrasing. If a user asks "Explain HyDE" 
-  and another asks "What is HyDE architecture?", L1 misses because strings differ. L2 computes 
-  the question vector and checks cosine similarity against past queries in `rag_semantic_cache`. 
-  If similarity >= 0.92, it serves the cached answer in ~30ms, saving an expensive Groq LLM call.
-- Self-Healing Promotion: When L2 hits, it immediately populates L1 for that wording.
-- Cache Invalidation: When documents re-index, L1 is flushed and L2 is truncated.
-
-Q4: Why use Cosine Distance instead of Euclidean (L2) distance in pgvector?
-A4:
-Cosine distance measures the angle between vectors, whereas Euclidean distance measures 
-the straight-line geometric distance. In document retrieval, text passages vary in length. 
-A short paragraph and a long paragraph discussing the exact same topic will have vectors 
-pointing in the same direction, but the longer passage will have a larger magnitude unless 
-perfectly normalized. Using cosine similarity (or unit-normalized vectors with dot product) 
-ensures semantic alignment irrespective of passage length.
-
-Q5: Why did you choose PostgreSQL with pgvector over dedicated vector databases like Pinecone, Weaviate, or Qdrant?
-A5:
-1. Operational Simplicity: A single PostgreSQL instance handles relational metadata, 
-   vector embeddings (`langchain_pg_embedding`), and semantic query caching (`rag_semantic_cache`).
-2. ACID Compliance & Joins: We can join vector embeddings directly with collection tables 
-   and perform relational filtering in a single SQL query.
-3. Cost & Portability: pgvector is open source and supported by every cloud provider (AWS RDS, 
-   Aurora, GCP Cloud SQL, Azure, Neon). There is zero vendor lock-in.
-4. Scale: With HNSW indexing in pgvector, PostgreSQL handles millions of vectors with 
-   single-digit millisecond latency.
-
-Q6: What is the purpose of HNSW index in pgvector, and how does it compare to IVFFlat?
-A6:
-- IVFFlat (Inverted File Flat): Partitions vector space into Voronoi cells. It requires training 
-  data, builds quickly, uses less RAM, but search recall drops significantly if the table grows 
-  or data distribution shifts.
-- HNSW (Hierarchical Navigable Small World): Builds a multi-layer graph where upper layers have 
-  long-distance links for fast routing, and lower layers have local links for precision. 
-  HNSW offers superior search speed and recall (>98%) without needing a training phase, making 
-  it the production standard for pgvector.
-
-Q7: What happens when the LLM hallucinates a tool name during agent execution?
-A7:
-Smaller open-source models like Qwen or LLaMA occasionally call `search_function` instead 
-of `search_document` because of pre-training bias on generic code snippets. 
-In `src/tools.py`, we registered `@tool("search_function")` as an explicit alias to 
-`search_document`. Both are bound to the LLM. If the model invokes either name, it resolves 
-to the same retriever implementation, eliminating runtime tool-not-found exceptions.
-
-Q8: How did you optimize FastAPI startup latency when using heavy machine learning packages?
-A8:
-Importing libraries like `torch`, `sentence_transformers`, and `transformers` takes 15–25 seconds 
-on CPU startup because hundreds of C-extensions and model registries are initialized. 
-By lazily importing these dependencies inside `get_agent()`, `search_documents()`, and 
-`src/cache.py` (only when an uncached query requires embedding), the FastAPI application 
-boots in less than 300ms. Endpoints like `GET /` and `/images/*` respond instantly without 
-waiting for PyTorch.
-
-Q9: How do you prevent SQL injection in vector queries?
-A9:
-All vector operations and semantic cache lookups use SQLAlchemy parameterized statements 
-(`sqlalchemy.text`). Vector literals are bound through named parameters (e.g., `:embedding`) 
-and cast safely within the database using `CAST(:embedding AS vector)`. Raw string interpolation 
-into SQL strings is strictly prohibited.
-
-Q10: What are the main failure modes of this RAG pipeline and how are they mitigated?
-A10:
-1. Document Out-of-Sync: Mitigated by `POST /api/reindex` which atomically rebuilds vectors 
-   and flushes both cache tiers.
-2. Network Latency to Remote DB: Mitigated by L1 In-Memory cache serving frequent queries in < 1ms.
-3. Groq Rate Limits / Outages: Mitigated by L2 Semantic Cache absorbing repeat and 
-   paraphrased traffic.
-4. Document Context Fragmentation: Mitigated by hierarchical breadcrumbs prepended to every chunk.
-5. Hallucinated Answers: Mitigated by strict system prompt instructions, temperature=0, and 
-   RAGAS faithfulness evaluations.
-
-================================================================================
-END OF TECHNICAL REFERENCE MANUAL
-================================================================================
+Comprehensive Developer Q&A Reference: System Design, Data Flow, Tooling, Multi-Tier Caching & LLM Gateway
+====================================================================================================
+
+Table of Contents
+----------------------------------------------------------------------------------------------------
+1. PART 1: PRODUCT VISION, FUNCTIONAL DOMAIN & MULTIMODAL RAG SCOPE (Q1 - Q4)
+2. PART 2: SYSTEM ARCHITECTURE & AGENTIC FRAMEWORK SELECTION (Q5 - Q8)
+3. PART 3: INGESTION & MULTIMODAL DOCUMENT PROCESSING PIPELINE (Q9 - Q13)
+4. PART 4: STORAGE ENGINE & VECTOR DATABASE DESIGN (POSTGRESQL & PGVECTOR) (Q14 - Q17)
+5. PART 5: MULTI-TIER CACHING ARCHITECTURE (TIER 1 TTL & TIER 2 PGVECTOR SEMANTIC CACHE WITH TIME-TO-CACHE VALIDITY) (Q18 - Q23)
+6. PART 6: UNIFIED LITELLM GATEWAY, ROUTING & FALLBACK DYNAMICS (Q24 - Q27)
+7. PART 7: HYBRID SEARCH (BM25 SPARSE + PGVECTOR DENSE + RECIPROCAL RANK FUSION) & CROSS-ENCODER RE-RANKING (Q28 - Q30)
+8. PART 8: AGENTIC TOOL REASONING, BREADCRUMB CONTEXT & CITATION GROUNDING (Q31 - Q34)
+9. PART 9: REAL-TIME STREAMING (SERVER-SENT EVENTS SSE), FASTAPI BACKEND & EMBEDDED UI (Q35 - Q39)
+10. PART 10: RAGAS EVALUATION FRAMEWORK, QUALITY METRICS & HARNESS (Q40 - Q42)
+11. PART 11: PRODUCTION CLOUD DEPLOYMENT, AZURE APIM/CONTAINER APPS & DEVOPS (Q43 - Q45)
+12. PART 12: ARCHITECTURAL TRADEOFFS, FAILURE MODES & EVOLUTIONARY ROADMAP (Q46 - Q48)
+----------------------------------------------------------------------------------------------------
+
+
+====================================================================================================
+PART 1: PRODUCT VISION, FUNCTIONAL DOMAIN & MULTIMODAL RAG SCOPE
+====================================================================================================
+
+Q1: What core business and technical problem does this Multimodal Agentic RAG system solve, and how does it fundamentally differ from standard naive text-based RAG pipelines?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is assessing your domain knowledge, understanding of real-world document complexity, and ability to distinguish an enterprise-grade agentic multimodal RAG system from a naive vector search tutorial.
+
+Developer Answer:
+"Enterprise knowledge is rarely stored in clean, homogeneous, plain-text markdown files. In organizations, core intellectual property—such as system architecture specifications, competitive engineering benchmarks, algorithmic trade-offs, and compliance blueprints—resides in rich Microsoft Word (.docx) documents.
+
+These enterprise documents possess three heterogeneous modalities that break standard naive RAG pipelines:
+1. Complex Hierarchical Text: Sections, subsections, and deeply nested bullet points where the meaning of a paragraph depends entirely on its parent headings (e.g., a paragraph stating 'Cost is $0.002 per 1k tokens' is completely meaningless if divorced from its parent heading 'OpenAI GPT-4o Mini Pricing').
+2. Multi-Column Structured Comparison Tables: Dense side-by-side matrices (e.g., 'RAG vs Fine-Tuning' across axes of latency, training compute, data freshness, and hallucination rate). Naive character splitters cut across table rows arbitrarily, destroying column alignment, headers, and semantic relationships.
+3. Embedded Visual Architectures & System Diagrams: Flowcharts, neural network architectures, and sequence diagrams embedded as binary image objects. Naive text splitters discard binary images entirely, losing critical workflow knowledge.
+
+Traditional Naive RAG pipelines suffer from four critical deficiencies:
+- Semantic Loss & Orphan Chunks: Text chunks lose their parent document breadcrumb context.
+- Modality Blindness: Complete inability to process or surface embedded diagrams and Markdown tables.
+- Rigid Single-Shot Retrieval: Naive RAG executes one vector search and passes the top-K chunks to the LLM. If the retrieval is off-target, incomplete, or requires comparing two disparate sections, the LLM hallucinates or returns an incomplete response.
+- Prohibitive Latency & Token Burn: Every query—even identical or semantically identical questions ('What is vibe coding?' vs 'Can you explain vibe coding?')—incurs full vector search overhead and expensive external LLM API inference.
+
+Our Multimodal Agentic RAG system solves this holistically:
+- Multimodal Ingestion: Ingests .docx files, tracks hierarchical breadcrumbs (`[Context: Heading 1 > Heading 2]`), transforms tables into pristine GitHub-Flavored Markdown, and extracts embedded binary diagrams into local assets while synthesizing semantic captions via vision models.
+- Consolidated Storage: Stores 414 dense vector embeddings (384-dimensional) alongside rich metadata in a single, ACID-compliant PostgreSQL database using the `pgvector` extension with an HNSW index.
+- Agentic Tool Reasoning: Replaces static chains with an autonomous LangChain tool-calling agent (ChatGroq Qwen 2.5 27B / LiteLLM Gateway) that can iteratively search, refine queries, inspect tables, and synthesize grounded answers with explicit citations.
+- 2-Tier Caching: Deploys an ultra-fast L1 In-Memory TTLCache (<1ms) paired with an L2 PostgreSQL pgvector Semantic Cache (cosine similarity >= 0.92, ~30ms), slashing LLM token spend by up to 80% and delivering instantaneous responses for recurring queries."
+
+
+Q2: What specific modalities and document artifacts does the system ingest, and what are the primary engineering challenges associated with each modality?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer wants to know how deeply you understand document parsing internals and the technical hurdles of handling diverse data types within a unified embedding space.
+
+Developer Answer:
+"Our system specifically ingests and harmonizes three distinct modalities from Microsoft Word documents:
+
+1. Hierarchical Narrative Text:
+   - Challenge: A standard paragraph in a technical document inherits context from multiple heading levels above it. If a chunker splits text naively based on 500-character windows, a chunk might say: 'It requires an upfront investment of 40 hours of compute.' The LLM cannot know whether 'It' refers to Full Fine-Tuning, LoRA, or Pretraining.
+   - Solution: Our `DocumentLoader` maintains a dynamic heading stack during XML paragraph traversal. Every extracted paragraph is automatically prepended with a synthesized breadcrumb header: `[Context: Section > Subsection > Topic]`.
+
+2. Structured Comparison Tables:
+   - Challenge: Word tables are stored as nested XML structures (`<w:tbl>`, `<w:tr>`, `<w:tc>`). Slicing a table across arbitrary character boundaries leaves partial rows without header rows, rendering the data illegible to embedding models and LLMs.
+   - Solution: We extract tables as atomic units, parse the header row, normalize cell text (handling line breaks and whitespace), and convert each table into a standard GitHub-Flavored Markdown table. Furthermore, we inject a synthetic descriptive header containing the table's context and surrounding section title.
+
+3. Embedded Visual Architectures & System Diagrams:
+   - Challenge: Diagrams (PNG, JPEG, EMF) are stored as raw binary image streams inside the docx ZIP container (`word/media/imageX.png`). Text embeddings cannot index raw pixel bytes directly.
+   - Solution: Our pipeline extracts image parts via document relationships (`rel.target_ref`), decodes them using `Pillow`, and writes them to `data/extracted_images/image_XX.png`. Then, our `image_captioner.py` uses a Vision LLM (Groq Llama 3.2 Vision) to generate dense technical descriptions of the diagram's architecture, components, and data flow. These descriptions are embedded into the vector store with metadata pointing back to the static image file path."
+
+
+Q3: How does the system guarantee groundedness and eliminate hallucinations when answering complex technical queries?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your knowledge of RAG reliability, prompt engineering guardrails, citation mechanisms, and hallucination mitigation.
+
+Developer Answer:
+"To guarantee deterministic groundedness and eliminate hallucinations, we implement strict guardrails across three architectural layers:
+
+1. Prompt-Level Guardrails (System Prompt Constraints):
+   - Mandatory Tool Usage: The system prompt explicitly commands the reasoning LLM: 'Always call search_document at least once before answering any factual or comparison question.'
+   - Refusal Enforcement: The agent is instructed: 'If the answer truly isn't in the document, say so clearly instead of making something up.'
+   - Citation Requirement: 'Cite the source file name(s) and relevant section(s) at the end of your answer.'
+
+2. Context-Enriched Retrieval Formatting:
+   - When the `search_document` tool executes a vector query against PostgreSQL, it does not return bare text. It enriches each retrieved passage with structured metadata:
+     `[Context: Section Header > Subsection Header] [Type: table|text|image] [Source: AI-Notes.docx]`
+   - This metadata explicitly anchors the LLM's attention mechanism to the authoritative section of the document.
+
+3. Multimodal Diagram Verification:
+   - For queries concerning system architectures or visual workflows, the tool returns the image's synthetic caption alongside its exact file path (e.g., `image_path: data/extracted_images/image_25.png`).
+   - The agent is forced to reference the components visible in the diagram and provide the image link, which our FastAPI backend and embedded UI transform into an interactive, clickable lightbox modal."
+
+
+Q4: How does the application balance end-user response latency with deep reasoning depth?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is probing your ability to design low-latency systems without compromising on agentic reasoning quality.
+
+Developer Answer:
+"Agentic workflows inherently introduce latency because the LLM performs multiple iterations: query interpretation, tool call generation, tool execution, context ingestion, and final answer synthesis. In standard setups, this can easily take 6 to 12 seconds.
+
+We balance latency and reasoning depth through a four-pillar optimization strategy:
+
+1. 2-Tier Multi-Level Caching:
+   - Tier 1 (In-Memory TTLCache): Sub-millisecond (<1ms) response for exact repeated questions.
+   - Tier 2 (PostgreSQL pgvector Semantic Cache): Sub-50ms response for semantically equivalent or paraphrased questions (cosine similarity >= 0.92).
+   - This completely bypasses the agent and LLM for a significant percentage of production traffic.
+
+2. Groq LPU (Language Processing Unit) Acceleration:
+   - We utilize ChatGroq running open-weights reasoning models (Qwen 2.5 27B / GPT-OSS 20B) on Groq LPUs.
+   - Groq delivers inference speeds exceeding 450–600 tokens/second, reducing raw generation time from ~4,000ms (on standard GPU cloud providers) to ~400–600ms.
+
+3. Sub-300ms FastAPI Server Initialization:
+   - All heavy models, vector stores, and database pools use lazy singleton loading. The server boots in ~280ms, making it instantly responsive to container orchestrator health checks.
+
+4. Bounded Agent Tool Iterations:
+   - We configure `max_iterations=5` on `AgentExecutor` and set a 30-second request timeout on the LiteLLM gateway, preventing infinite reasoning loops or runaway token consumption."
+
+
+====================================================================================================
+PART 2: SYSTEM ARCHITECTURE & AGENTIC FRAMEWORK SELECTION
+====================================================================================================
+
+Q5: Walk through the high-level system architecture and end-to-end data flow from document ingestion to user response delivery.
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer wants an end-to-end architectural walkthrough with system components, communication protocols, and execution lifecycles.
+
+Developer Answer:
+"The application is structured into two decoupled lifecycles: Ingestion/Indexing (Offline/Admin) and Query/Reasoning (Online/Runtime).
+
+1. Ingestion & Indexing Pipeline:
+```
++-----------------------------------------------------------------------------------+
+|                            INGESTION PIPELINE                                     |
++-----------------------------------------------------------------------------------+
+  [data/AI-Notes.docx]
+          |
+          v
+  [src/document_loader.py (python-docx)]
+          +---> Text Paragraphs     ---> Dynamic Heading Stack ([Context: H1 > H2])
+          +---> 24 Comparison Tables ---> GitHub-Flavored Markdown Tables
+          +---> 36 Binary Images    ---> Pillow File Extraction (data/extracted_images/)
+                                         + Groq Vision Captioning (image_captions.json)
+          |
+          v
+  [src/chunker.py (Multimodal Splitter)]
+          +---> Preserves Tables as Atomic Chunks
+          +---> Recursive Splitter for Text (1000 chars, 150 overlap)
+          +---> Synthetic Diagram Chunks (Captions + Metadata + Paths)
+          |
+          v
+  [src/vector_store.py (sentence-transformers/all-MiniLM-L6-v2)]
+          | Generates 384-dimensional dense embeddings
+          v
+  [PostgreSQL pgvector Table (ai_notes_docs on Neon Cloud)]
+          +---> 414 Chunks Indexed with HNSW (m=16, ef_construction=64)
+```
+
+2. Query & Runtime Inference Flow:
+```
++-----------------------------------------------------------------------------------+
+|                              QUERY LIFECYCLE                                      |
++-----------------------------------------------------------------------------------+
+  [User Client / Web UI / REST Request]
+          |  POST /api/ask {"question": "Compare RAG vs Fine-Tuning"}
+          v
+  [src/api.py (FastAPI Endpoint)]
+          |
+          v
+  [src/cache.py (2-Tier Hybrid Cache)]
+          |
+          +---> [Tier 1: L1 In-Memory TTLCache]
+          |        Hit? Return cached answer in <1ms (Status: 'L1 Cache Hit')
+          |
+          +---> [Tier 2: L2 pgvector Semantic Cache]
+                   Compute 384-dim embedding
+                   Run cosine similarity search (threshold >= 0.92)
+                   Hit? Promote to L1, return in ~35ms (Status: 'L2 Semantic Cache Hit')
+          |
+          | (Cache Miss)
+          v
+  [src/gateway.py (LiteLLM Gateway)]
+          | Primary: groq/qwen/qwen3.8-27b (Failover: groq/openai/gpt-oss-20b)
+          v
+  [src/agent.py (LangChain Tool-Calling Agent)]
+          |
+          +---> Evaluates System Prompt & Available Tools
+          |
+          +---> Invokes `search_document(query="RAG vs Fine-Tuning comparison")`
+          |            |
+          |            v
+          |     [PostgreSQL pgvector Retrieval]
+          |     Cosine distance (<=>), top_k=4 chunks
+          |            |
+          |            v
+          |     Returns Context-Enriched Markdown Tables & Paragraphs
+          |
+          +---> Synthesizes Grounded Answer + Extracts Image References
+          |
+          v
+  [Store in L1 Cache & L2 pgvector Cache]
+          |
+          v
+  [HTTP 200 JSON Response to Client with Answer, Diagram URLs & Cache Badges]
+```"
+
+
+Q6: Why was an Agentic Tool-Calling architecture chosen over a static LangChain `RetrievalQA` or LCEL chain?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer evaluates your understanding of modern agentic design patterns vs legacy static chains.
+
+Developer Answer:
+"Static retrieval chains (such as `RetrievalQA` or a basic LCEL pipeline: `prompt | llm | StrOutputParser`) follow a linear, inflexible DAG:
+`User Query -> Embed -> Retrieve Top-K -> Stuff into Prompt -> LLM Generation`.
+
+This static pattern fails in technical enterprise search for three reasons:
+1. Multi-Hop Query Failure: If a user asks 'Compare the memory footprint of HyDE versus Dense Retrieval', a static chain performs a single search. If that search retrieves only HyDE details, the LLM must guess or hallucinate the Dense Retrieval details.
+2. Inability to Reformulate Queries: If the user's question uses terminology different from the document's headers, the first retrieval might return low-relevance chunks. A static chain has no mechanism to evaluate retrieval quality and try a different query.
+3. Lack of Autonomous Tool Orchestration: In an enterprise setting, an assistant may need multiple tools (e.g., `search_document`, `lookup_table`, `calculator`, `fetch_latest_nav`). Static chains cannot dynamically choose which tool to call.
+
+Why Agentic Tool-Calling (`create_tool_calling_agent`):
+- Dynamic Iteration: The agent inspects the user query, calls `search_document`, evaluates the returned passages in its scratchpad (`MessagesPlaceholder`), and if necessary, executes a second targeted search to gather missing context before generating the final answer.
+- Self-Correction: If the initial query returns unrelated sections, the model autonomously rephrases the search terms.
+- Deterministic Guardrails: The agent can choose NOT to call the retriever if the user asks a conversational question, or call it multiple times for complex multi-part comparisons, bounded by `max_iterations=5`."
+
+
+Q7: Why did you select `ChatGroq` (specifically Qwen 2.5 27B / GPT-OSS 20B) as the reasoning core rather than standard OpenAI GPT-4o?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer wants to understand model evaluation criteria, hardware accelerator advantages, and cost/performance trade-offs.
+
+Developer Answer:
+"Selecting an LLM provider for an agentic application involves balancing three variables: Tool-Calling Accuracy, Token Generation Latency, and Operational Cost.
+
+1. Inference Latency & Groq LPU Architecture:
+   - In an agentic tool-calling loop, latency is multiplicative: Latency = (Time to generate Tool Call JSON) + (Retriever Execution) + (Time to generate Final Synthesis).
+   - Standard GPU cloud providers (NVIDIA H100/A100 instances hosting closed or open models) typically run at 50–90 tokens/second. Two agent round-trips can easily take 6–8 seconds.
+   - Groq’s Tensor Streaming Processor (LPU) architecture achieves deterministic execution speeds of 450–600 tokens/second. The agent’s tool call JSON is generated in ~120ms, and the final response synthesizes in ~600ms, making the agent feel instantaneous.
+
+2. Open-Weights Excellence (Qwen 2.5 27B):
+   - Qwen 2.5 27B is one of the strongest open-weights models for structured JSON output, markdown table comprehension, and function calling, rivaling proprietary 70B+ models while maintaining a lightweight context footprint.
+
+3. Cost Governance:
+   - Calling GPT-4o on every turn and every tool-iteration in an enterprise environment becomes cost-prohibitive ($2.50 to $10.00 per 1M tokens).
+   - ChatGroq provides an order-of-magnitude lower cost structure, which, when combined with our 2-Tier Caching layer and LiteLLM gateway, slashes enterprise operating expenses by over 85%."
+
+
+Q8: How is the codebase structured into modular components, and what design principles were followed?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is reviewing software craftsmanship, separation of concerns, and maintainability.
+
+Developer Answer:
+"The repository follows Clean Architecture and SOLID principles, ensuring strict decoupling between ingestion, storage, retrieval, caching, reasoning, and presentation:
+
+```
+AI-Questions/
+├── .env                  # Centralized environment configuration
+├── requirements.txt      # Pinned production dependencies
+├── Dockerfile            # Multi-stage production container definition
+├── data/
+│   ├── AI-Notes.docx     # Source technical Word document
+│   └── extracted_images/ # Extracted diagram binaries & image_captions.json
+├── src/
+│   ├── config.py         # Pydantic BaseSettings singleton with validation
+│   ├── document_loader.py# Custom python-docx multimodal parser
+│   ├── image_captioner.py# Groq Vision pipeline with persistent local cache
+│   ├── chunker.py        # Context-preserving recursive & table chunker
+│   ├── vector_store.py   # PostgreSQL pgvector repository via langchain-postgres
+│   ├── cache.py          # 2-Tier Hybrid Cache (L1 TTLCache + L2 pgvector Semantic)
+│   ├── gateway.py        # LiteLLM Unified Gateway (Routing, Fallbacks, Metrics)
+│   ├── tools.py          # LangChain @tool definitions with alias guardrails
+│   ├── agent.py          # ChatPromptTemplate & create_tool_calling_agent
+│   ├── api.py            # FastAPI ASGI application & static mount points
+│   └── main.py           # CLI entry point (Interactive, Single Query, Re-index)
+├── static/
+│   └── index.html        # Embedded single-page Tailwind CSS chat interface
+├── tests/
+│   ├── test_cache.py     # Unit & integration tests for L1 & L2 caching
+│   └── test_gateway.py   # Gateway failover & token limit verification
+└── evaluation/
+    ├── testset.json      # Ground-truth question & answer benchmark set
+    ├── ragas_eval.py     # RAGAS automated evaluation harness
+    └── results/          # Timestamped evaluation CSV outputs
+```
+
+Design Principles Enforced:
+- Single Responsibility: `document_loader.py` only extracts raw elements; `chunker.py` only chunks; `vector_store.py` only handles embeddings and database persistence.
+- Dependency Inversion: High-level modules (`api.py`, `main.py`) depend on abstractions (`agent.py`, `cache.py`), not raw SQL or direct third-party SDK calls.
+- Configuration as Code: Zero hardcoded magic strings or credentials; everything is loaded and validated through `src.config.settings`."
+
+
+====================================================================================================
+PART 3: INGESTION & MULTIMODAL DOCUMENT PROCESSING PIPELINE
+====================================================================================================
+
+Q9: How does the custom `DocumentLoader` extract hierarchical text paragraphs while preserving parent document structure?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer wants to understand how you parse Word document XML and solve the 'lost-in-the-middle' context problem.
+
+Developer Answer:
+"Standard Word document parsers (like naive python-docx text dumpers or basic unstructured loaders) iterate over paragraphs and output flat strings. When a document has five levels of headings, chunks extracted from deep subsections lose all relationship to the primary topic.
+
+In `src/document_loader.py`, we implement a stateful Heading Stack Tracker:
+1. XML Style Inspection:
+   - As we iterate through `doc.paragraphs`, we inspect the `p.style.name`.
+   - Microsoft Word assigns styles like 'Heading 1', 'Heading 2', 'Heading 3', etc.
+2. Dynamic Stack Maintenance:
+   - We maintain a breadcrumb list: `current_headings = []`.
+   - When a 'Heading 1' is encountered, the stack is reset: `['Artificial Intelligence']`.
+   - When a 'Heading 2' appears, it appends: `['Artificial Intelligence', 'Retrieval-Augmented Generation']`.
+   - When a subsequent 'Heading 2' appears, it pops the previous Heading 2 and replaces it, preserving the exact hierarchical tree.
+3. Breadcrumb Enrichment:
+   - For every body paragraph extracted, we synthesize a breadcrumb prefix:
+     `[Context: Artificial Intelligence > Retrieval-Augmented Generation > Naive vs Advanced RAG]`
+   - This breadcrumb is prepended to the chunk text before embedding. When vector search calculates cosine similarity, the embedding captures both the granular sentence semantics and the high-level categorical context."
+
+
+Q10: How does the system extract, format, and preserve multi-column comparison tables without losing spatial semantic relationships?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your approach to tabular data in RAG, which is notoriously difficult for LLMs to interpret if flattened into plain strings.
+
+Developer Answer:
+"In technical documentation, tables contain dense, structured comparisons (e.g., comparing Dense vs Sparse Retrieval across Dimensions, Compute Requirements, and Out-of-Domain Generalization).
+
+In `src/document_loader.py`, we handle tables with a dedicated extraction pipeline:
+1. Table Element Traversal:
+   - We iterate over `doc.tables`.
+   - Each table's rows (`table.rows`) and cells (`row.cells`) are traversed.
+2. Header Row Extraction:
+   - The first row is extracted as the canonical column schema (e.g., `['Feature', 'Dense Retrieval', 'Sparse Retrieval (BM25)']`).
+3. Cell Normalization:
+   - Cells often contain internal line breaks (`\n`), trailing tabs, or bullet characters. We strip extraneous whitespace while preserving intra-cell formatting.
+4. GitHub-Flavored Markdown Conversion:
+   - We format the table into standard markdown syntax:
+     ```markdown
+     | Feature | Dense Retrieval | Sparse Retrieval (BM25) |
+     | :--- | :--- | :--- |
+     | Embedding Space | 384-1536 dim dense vectors | High-dim sparse lexical vectors |
+     | Semantic Match | Matches intent & synonyms | Matches exact keywords & tokens |
+     ```
+5. Contextual Encapsulation:
+   - We prepend the table with the nearest preceding heading breadcrumb so the table is never orphaned.
+6. Atomic Preservation:
+   - In `src/chunker.py`, tables are treated as indivisible semantic units. They are never sliced across rows by the character splitter, ensuring the LLM always receives the entire table schema and data rows intact."
+
+
+Q11: How does the system extract embedded architecture diagrams and system flowcharts from the `.docx` archive?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is assessing your knowledge of OpenXML / docx internal packaging and binary media extraction.
+
+Developer Answer:
+"A `.docx` file is an Open Packaging Convention (OPC) compliant ZIP archive containing XML files and media assets. Embedded images are stored under the `word/media/` directory within the archive.
+
+Our extraction process in `src/document_loader.py`:
+1. Relationship Traversal:
+   - We access `doc.part.rels`.
+   - We inspect relationship targets for image content types (`http://schemas.openxmlformats.org/officeDocument/2006/relationships/image`).
+2. Binary Stream Extraction:
+   - For each image relationship, we access the underlying binary blob: `rel.target_part.blob`.
+3. Image Verification & Format Normalization:
+   - We wrap the byte stream in `io.BytesIO` and open it via `PIL.Image.open()`.
+   - This validates that the binary is a valid image format (PNG, JPEG, TIFF, BMP).
+4. Deterministic On-Disk Persistence:
+   - Images are saved to `data/extracted_images/image_{idx:02d}.png`.
+   - In our benchmark document `AI-Notes.docx`, exactly 36 distinct architectural diagrams, neural schematics, and flowcharts were extracted.
+5. Metadata Linkage:
+   - Each image part records its source filename, relative path, and surrounding document paragraph position, allowing downstream components to bind the image to its parent section."
+
+
+Q12: How does the multimodal image captioning pipeline work, and how does it prevent redundant, costly vision API calls?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer wants to understand vision LLM integration, prompt design for diagrams, and caching strategies for asset processing.
+
+Developer Answer:
+"Raw image binaries cannot be indexed by dense text embedding models (`sentence-transformers/all-MiniLM-L6-v2`). To make visual architectures searchable, we must translate visual diagrams into rich semantic text descriptions.
+
+Our implementation in `src/image_captioner.py`:
+1. Vision Model Selection:
+   - We utilize Groq's Vision API hosting `llama-3.2-11b-vision-preview` / `llama-3.2-90b-vision-preview`.
+2. Specialized Engineering Prompt:
+   - Standard vision prompts ('Describe this image') generate superficial descriptions ('A diagram with boxes and arrows').
+   - We use an architecture-focused prompt:
+     `'Analyze this technical architecture diagram. Identify all system components, data flow directions, protocols, model names, vector databases, and steps. Provide a concise, highly detailed summary suitable for technical search retrieval.'`
+3. Persistent JSON Caption Cache:
+   - Vision API calls incur network latency and token cost.
+   - We implement a persistent cache at `data/extracted_images/image_captions.json`.
+   - On startup or re-indexing, the captioner checks if a valid caption already exists for `image_XX.png`.
+   - If present, it loads the caption from disk in 0.05ms with zero API cost.
+   - Only new or modified diagrams trigger an external Groq Vision API call.
+4. Synthetic Document Creation:
+   - The resulting caption is wrapped in a LangChain `Document`:
+     - `page_content`: `[Diagram Architecture: Context: Section Name] Caption text describing workflow...`
+     - `metadata`: `{"type": "image", "image_path": "data/extracted_images/image_XX.png", "section": "..."}`."
+
+
+Q13: Describe the chunking strategy in `chunker.py`: How are different modalities chunked differently to maintain semantic coherence?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your expertise in advanced chunking techniques beyond basic sliding windows.
+
+Developer Answer:
+"A major flaw in naive RAG systems is applying a single homogeneous chunking rule to every document artifact. In `src/chunker.py`, we implement a Modality-Aware Chunking Strategy:
+
+1. Text Paragraphs:
+   - We utilize `RecursiveCharacterTextSplitter` configured with:
+     - `chunk_size = 1000` characters
+     - `chunk_overlap = 150` characters
+     - `separators = ["\n\n", "\n", ". ", " ", ""]`
+   - Crucially, the splitting occurs AFTER breadcrumb prefix injection. If a paragraph exceeds 1000 characters and is split into two chunks, both chunks retain the `[Context: H1 > H2]` prefix, ensuring neither chunk becomes an orphan.
+
+2. Markdown Comparison Tables:
+   - Tables are NEVER split using character windows.
+   - A comparison table is treated as an atomic semantic entity. If a table contains 8 rows, splitting it at row 4 destroys the comparative analysis.
+   - Each table is encapsulated into its own dedicated chunk with metadata `{"type": "table"}`.
+
+3. Diagram & Image Captions:
+   - Each diagram chunk contains the synthesized technical description, the parent section context, and the image file path.
+   - Chunk size matches the caption length (~300–600 characters), accompanied by metadata `{"type": "image", "image_path": "..."}`.
+
+Total Dataset Metrics:
+From `AI-Notes.docx`, this multimodal chunking pipeline generates exactly 414 high-density, context-rich chunks (354 text chunks, 24 table chunks, and 36 image diagram chunks)."
+
+
+====================================================================================================
+PART 4: STORAGE ENGINE & VECTOR DATABASE DESIGN (POSTGRESQL & PGVECTOR)
+====================================================================================================
+
+Q14: Why choose PostgreSQL with `pgvector` (via Neon Serverless) as the vector database over dedicated vector stores like Pinecone, Milvus, or Qdrant?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is evaluating your database selection rationale, total cost of ownership (TCO) considerations, and enterprise architectural maturity.
+
+Developer Answer:
+"While dedicated vector databases (Pinecone, Qdrant, Milvus) offer specialized vector search capabilities, choosing them introduces significant architectural overhead:
+- Dual-Database Sync Complexity: Managing vectors in Pinecone while managing user profiles, session state, audit logs, and cache entries in PostgreSQL requires distributed two-phase commits or error-prone ETL sync pipelines.
+- Cold Starts & Vendor Lock-In: Proprietary cloud vector stores carry vendor lock-in and high monthly minimum costs.
+- Lack of Relational Joins: Dedicated vector stores cannot join vector search results directly with relational business tables in a single atomic SQL transaction.
+
+Why PostgreSQL with `pgvector` (via Neon Serverless):
+1. Single Unified Database: PostgreSQL serves as our vector database, relational store, metadata repository, and semantic cache database simultaneously.
+2. Serverless Auto-Scaling (Neon): Neon provides scale-to-zero compute when idle, instant branching for staging/testing environments, and automated storage expansion.
+3. Full ACID Guarantees: Updates to document collections and semantic cache entries are fully transactional.
+4. Native SQL Ecosystem: We leverage standard SQLAlchemy, psycopg2, and `langchain-postgres` without introducing foreign query languages.
+5. Production Maturity: `pgvector` is battle-tested, supported across all cloud providers (AWS RDS/Aurora, Azure Flexible Server, GCP Cloud SQL), ensuring zero vendor lock-in."
+
+
+Q15: What embedding model is used, what is its dimensionality, and why was it chosen?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your knowledge of representation learning, embedding dimensionality, memory footprints, and latency trade-offs.
+
+Developer Answer:
+"We selected `sentence-transformers/all-MiniLM-L6-v2` from HuggingFace, managed via LangChain's `HuggingFaceEmbeddings`.
+
+Technical Specifications:
+- Architecture: 6-layer BERT-based transformer model optimized via knowledge distillation.
+- Output Dimensionality: 384 dimensions.
+- Max Sequence Length: 256 tokens.
+- Parameter Count: ~22.7 Million parameters.
+- Model Size: ~90 MB.
+
+Why this model fits our architecture:
+1. Low Dimensionality (384 vs 1536/3072):
+   - OpenAI's `text-embedding-3-small` outputs 1536 dimensions; `text-embedding-3-large` outputs 3072 dimensions.
+   - At 384 dimensions, our vector index requires 75% less RAM and disk storage, drastically accelerating vector dot-product and cosine distance computations.
+2. Local CPU Inference (Zero API Latency & Zero Cost):
+   - Because `all-MiniLM-L6-v2` is only 90 MB, it runs locally within our Python process on standard CPU cores in ~15ms per chunk.
+   - It eliminates external network round-trips to OpenAI/Cohere for embeddings, avoids rate limits (HTTP 429), and incurs zero external cost.
+3. Benchmark Retrieval Performance:
+   - On the MTEB (Massive Text Embedding Benchmark), `all-MiniLM-L6-v2` demonstrates exceptional semantic clustering for technical documentation, sentence similarity, and retrieval tasks."
+
+
+Q16: How is the `pgvector` table structured, and what vector indexing algorithm (HNSW vs IVFFlat) is utilized?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer probes your deep database indexing knowledge, specifically asking for algorithmic comparison between HNSW and IVFFlat in pgvector.
+
+Developer Answer:
+"Our vector table is managed via `langchain-postgres` under the collection name `ai_notes_docs`.
+
+Table Structure:
+- `id`: UUID primary key.
+- `collection_id`: Foreign key referencing the collection namespace.
+- `content`: Text of the chunk (including breadcrumbs, markdown tables, or diagram captions).
+- `embedding`: `vector(384)` dense vector column.
+- `cmetadata`: `JSONB` column containing source filename, section, chunk type (text, table, image), and image paths.
+
+Index Selection: HNSW (Hierarchical Navigable Small World)
+We configure an HNSW index using the cosine distance operator (`<=>`):
+```sql
+CREATE INDEX ON langchain_pg_embedding 
+USING hnsw (embedding vector_cosine_ops) 
+WITH (m = 16, ef_construction = 64);
+```
+
+Why HNSW over IVFFlat:
+1. No Training Step Required:
+   - IVFFlat partitions vectors into Voronoi cells using k-means clustering. This requires pre-populating the table with data before creating the index. If new vectors are added, IVFFlat centroids become stale, degrading recall unless the index is fully rebuilt.
+   - HNSW is an incremental graph structure. Vectors can be inserted, updated, or deleted continuously without retraining.
+2. Search Speed vs Recall Curve:
+   - HNSW provides superior recall (>98%) at significantly higher query throughput (QPS) compared to IVFFlat.
+   - HNSW navigates a multi-layer graph, starting at top sparse layers and descending to denser bottom layers in logarithmic $O(\log N)$ time.
+3. Index Parameters Configured:
+   - `m = 16`: The number of bidirectional links created per vector node. Provides excellent graph connectivity without excessive memory overhead.
+   - `ef_construction = 64`: The size of the dynamic candidate list during index build, ensuring high graph quality."
+
+
+Q17: How does vector normalization affect cosine distance calculations in `pgvector`?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your mathematical understanding of vector spaces and SIMD hardware acceleration in vector retrieval.
+
+Developer Answer:
+"Cosine similarity between two vectors $\mathbf{u}$ and $\mathbf{v}$ is defined as:
+$$\text{Cosine Similarity}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\|_2 \|\mathbf{v}\|_2}$$
+
+Cosine distance is defined as:
+$$D_C(\mathbf{u}, \mathbf{v}) = 1 - \text{Cosine Similarity}(\mathbf{u}, \mathbf{v})$$
+
+In raw unnormalized vector spaces, computing cosine distance requires:
+1. Computing the dot product $\sum_{i=1}^d u_i v_i$.
+2. Computing the Euclidean norm of $\mathbf{u}$: $\sqrt{\sum u_i^2}$.
+3. Computing the Euclidean norm of $\mathbf{v}$: $\sqrt{\sum v_i^2}$.
+4. Performing floating-point division and subtraction.
+
+Mathematical Optimization via L2 Unit Normalization:
+When embeddings are normalized to unit length prior to storage:
+$$\|\mathbf{u}\|_2 = 1 \quad \text{and} \quad \|\mathbf{v}\|_2 = 1$$
+The formula collapses to:
+$$\text{Cosine Similarity}(\mathbf{u}, \mathbf{v}) = \mathbf{u} \cdot \mathbf{v}$$
+$$D_C(\mathbf{u}, \mathbf{v}) = 1 - (\mathbf{u} \cdot \mathbf{v})$$
+
+Impact on `pgvector` Performance:
+- Calculating a pure dot product uses vectorized CPU instructions (AVX-512 / AVX2 / ARM NEON) that execute in parallel across CPU registers.
+- Eliminating square roots and floating-point divisions reduces vector comparison CPU cycles by over 60%, delivering faster query filtering and lower query latency under high QPS."
+
+
+====================================================================================================
+PART 5: MULTI-TIER CACHING ARCHITECTURE (TIER 1 TTL & TIER 2 PGVECTOR SEMANTIC CACHE WITH TIME-TO-CACHE VALIDITY)
+====================================================================================================
+
+Q18: Walk through the design of the 2-Tier Hybrid Caching architecture in `src/cache.py`.
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer wants to understand your multi-level caching strategy, how exact-match and semantic caches interact, and the latency/cost implications.
+
+Developer Answer:
+"In production AI applications, 30% to 50% of user queries are either identical repetitions or semantic variations of previous questions. Hitting the LLM agent for every query results in high token costs and 3–6 second wait times.
+
+In `src/cache.py`, we designed and implemented a 2-Tier Hybrid Cache:
+
+```
+               [Incoming User Query]
+                         │
+                         ▼
+        ┌──────────────────────────────────┐
+        │   Tier 1: In-Memory TTLCache     │
+        │   - Key: MD5(Normalized Query)   │
+        │   - Capacity: 500 entries        │
+        │   - TTL: 2 Hours (7200s)         │
+        └────────────────┬─────────────────┘
+                         │
+               Hit? ─────┴───── Miss?
+                │                 │
+                ▼                 ▼
+         [Return in <1ms] ┌──────────────────────────────────┐
+                          │  Tier 2: pgvector Semantic Cache │
+                          │  - Compute 384-dim Query Vector  │
+                          │  - Cosine Sim >= 0.92 Threshold  │
+                          │  - Table: rag_semantic_cache     │
+                          └───────────────┬──────────────────┘
+                                          │
+                                Hit? ─────┴───── Miss?
+                                 │                 │
+                                 ▼                 ▼
+                         [Promote to L1]   [Execute Agent Loop]
+                         [Return in ~35ms]         │
+                                                   ▼
+                                           [Save to L1 & L2]
+                                           [Return in 2-4s]
+```
+
+1. Tier 1 (L1 In-Memory TTLCache):
+   - Fast, ephemeral cache using `cachetools.TTLCache`.
+   - Normalizes text (lowercase, stripped punctuation) and hashes it with MD5.
+   - Max size: 500 entries; TTL: 7200 seconds (2 hours).
+   - Execution time: ~0.08ms. Zero network or database overhead.
+
+2. Tier 2 (L2 PostgreSQL pgvector Semantic Cache):
+   - Persistent relational table `rag_semantic_cache` in Neon PostgreSQL.
+   - Stores user queries alongside their 384-dimensional dense embeddings and full JSON response payloads (answer text, sources, image links).
+   - Evaluates cosine similarity: if a past query exists with similarity >= 0.92, it returns the cached answer in ~30–45ms.
+   - Handles paraphrased queries ('What is vibe coding?' matches 'Explain vibe coding to me')."
+
+
+Q19: How does the semantic cache perform similarity matching in PostgreSQL, and how does the SQL query work?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your SQL and pgvector query construction skills, specifically looking for cosine similarity math and ANSI SQL casting.
+
+Developer Answer:
+"The L2 semantic cache persists queries in the table `rag_semantic_cache`:
+
+```sql
+CREATE TABLE IF NOT EXISTS rag_semantic_cache (
+    id SERIAL PRIMARY KEY,
+    query_text TEXT NOT NULL,
+    query_embedding vector(384) NOT NULL,
+    response_text TEXT NOT NULL,
+    sources JSONB DEFAULT '[]'::jsonb,
+    images JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+
+When a new query misses L1, `src/cache.py` generates the 384-dimensional embedding using `all-MiniLM-L6-v2`. It then executes the following parameterized SQL query:
+
+```sql
+SELECT response_text, sources, images,
+       1 - (query_embedding <=> CAST(:embedding AS vector)) AS similarity
+FROM rag_semantic_cache
+WHERE 1 - (query_embedding <=> CAST(:embedding AS vector)) >= :threshold
+ORDER BY similarity DESC
+LIMIT 1;
+```
+
+Key Architectural Details:
+1. Cosine Distance Operator `<=>`: In `pgvector`, `<=>` computes the cosine distance between two vectors. Therefore, $1 - (\mathbf{u} \Leftrightarrow \mathbf{v})$ computes the cosine similarity.
+2. ANSI Standard Casting: We use `CAST(:embedding AS vector)` rather than PostgreSQL shorthand `:embedding::vector`. In SQLAlchemy, double colons (`::`) conflict with bind parameter syntax, causing parsing exceptions.
+3. Threshold Tuning: We enforce `:threshold = 0.92`. Empirical testing demonstrated that a 0.92 threshold prevents false-positive cache hits across technical topics while reliably catching paraphrased questions."
+
+
+Q20: What is the 'Self-Healing L1 Promotion' pattern, and why is it critical for throughput?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer assesses your knowledge of cache hierarchy dynamics, data locality, and multi-tier promotion patterns.
+
+Developer Answer:
+"In multi-tiered caching systems, retrieving data from a lower, slower tier (L2 database) without promoting it to the higher, faster tier (L1 memory) is an anti-pattern known as 'Cache Starvation'.
+
+The Problem:
+If User A asks 'Explain vibe coding', it misses L1, misses L2, runs the agent, and populates both L1 and L2.
+After 2 hours, L1 TTL expires.
+User B asks 'Can you explain vibe coding?'.
+This misses L1, but hits L2 in PostgreSQL (cosine similarity = 0.94).
+If we simply returned the L2 answer without updating L1, subsequent identical requests would continue hitting the PostgreSQL database, incurring 35ms network round-trips and consuming database connection pool slots.
+
+The Self-Healing L1 Promotion Solution:
+Whenever an L2 semantic cache hit occurs in `src/cache.py`:
+1. The response payload (answer, sources, images) is retrieved from PostgreSQL.
+2. The exact incoming query string from User B is immediately hashed and stored into the local L1 `TTLCache`.
+3. Subsequent requests with that exact phrasing now hit L1 directly in <1ms.
+
+Benefits:
+- Eliminates recurring database reads for popular paraphrased queries.
+- Prevents database connection exhaustion during traffic spikes.
+- Keeps the in-memory working set fresh based on real user access patterns."
+
+
+Q21: How does the caching layer handle cache invalidation when documents are re-indexed or updated?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is asking the classic computer science question: 'There are only two hard things in Computer Science: cache invalidation and naming things.'
+
+Developer Answer:
+"A critical failure mode in RAG systems with semantic caching is serving stale answers after source documentation has been updated. If an engineer updates `AI-Notes.docx` with new pricing or an updated architecture, serving a cached answer generated from the old document violates system integrity.
+
+Our Cache Invalidation Strategy:
+1. Atomic Dual-Tier Purge:
+   - In `src/cache.py`, we implement `clear_all()`:
+     ```python
+     def clear_all(self):
+         # 1. Flush L1 in-memory dictionary
+         with self._lock:
+             self._l1_cache.clear()
+         # 2. Truncate L2 PostgreSQL semantic table
+         with self._engine.begin() as conn:
+             conn.execute(text("TRUNCATE TABLE rag_semantic_cache;"))
+     ```
+2. Triggered on Ingestion & Re-Index:
+   - When an administrator triggers `POST /api/reindex` or executes `python -m src.main --rebuild-index`:
+     a. The old vector collection `ai_notes_docs` is dropped and rebuilt in PostgreSQL.
+     b. `cache.clear_all()` is executed immediately within the same lifecycle.
+3. Thread-Safe Isolation:
+   - The L1 cache is protected by a `threading.Lock()` to prevent race conditions during concurrent clear and read operations.
+4. Result:
+   - 100% guarantee that any post-reindex query reflects the newly ingested document content, with zero lingering stale answers."
+
+
+Q22: What cache observability and telemetry endpoints are provided, and how do they aid production monitoring?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer evaluates your operational observability mindset.
+
+Developer Answer:
+"Without granular metrics, caching layers become black boxes where engineers cannot tell if hit rates are healthy or if thresholds are misconfigured.
+
+In `src/cache.py`, we track telemetry via a thread-safe `CacheStats` object and expose it via `GET /api/cache/stats`:
+
+```json
+{
+  "cache_enabled": true,
+  "semantic_threshold": 0.92,
+  "l1_memory_cache": {
+    "current_size": 14,
+    "max_size": 500,
+    "ttl_seconds": 7200,
+    "hits": 42
+  },
+  "l2_semantic_cache": {
+    "table_name": "rag_semantic_cache",
+    "hits": 18,
+    "total_persisted_entries": 31
+  },
+  "overall": {
+    "total_lookups": 85,
+    "cache_misses": 25,
+    "hit_rate_percentage": 70.59
+  }
+}
+```
+
+How this aids production operations:
+- Hit Rate Tracking: Displays total lookups, L1 hits, L2 hits, misses, and cumulative hit rate percentage.
+- Semantic Threshold Validation: If L2 hits remain 0 despite high traffic, the 0.92 threshold may be too strict; if users report inaccurate cached answers, it may be too loose.
+- Administrative Control: We provide `POST /api/cache/clear` to allow operations teams to immediately flush caches on demand without restarting the server."
+
+
+Q23: How does Time-To-Cache (TTL) validity work in the Vector Embedding Cache (L2 Semantic Cache), why do naive vector caches lack it, and how is `CACHE_L2_TTL` implemented?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your understanding of vector database lifecycle management, temporal data degradation, and production cache eviction strategies.
+
+Developer Answer:
+"In traditional key-value caches (like Redis or Memcached), every key-value pair can be assigned an absolute Time-To-Live (`EXPIRE key 86400`). When the TTL expires, the storage engine evicts the key automatically.
+
+Why Naive Vector Embedding Caches Lack TTL:
+Vector databases (including PostgreSQL `pgvector`, Pinecone, Milvus, and Qdrant) are engineered for static or slowly-mutating vector indexes using HNSW or IVF graphs. By default, they do not have background TTL eviction engines. 
+In naive semantic caching tutorials, developers insert a user query vector and LLM response into a table with a timestamp, but when querying for nearest neighbors:
+```sql
+-- NAIVE APPROACH (NO TTL)
+SELECT response_text FROM semantic_cache 
+WHERE 1 - (embedding <=> :query_vector) >= 0.90 
+ORDER BY similarity DESC LIMIT 1;
+```
+This naive approach suffers from permanent cache persistence:
+1. If domain documentation updates (e.g., pricing, technical APIs, or system architecture changes), a 6-month-old cached answer will continue to be served to users forever whenever cosine similarity is >= 0.90.
+2. Even if documentation is static, cached answers may contain transient assumptions or deprecated model styles.
+
+Our Time-To-Cache (TTL) Architecture in `src/cache.py`:
+We introduced configurable Time-To-Cache validity for the L2 pgvector semantic cache via `CACHE_L2_TTL`:
+
+1. Configuration Parameter:
+   - Configured in `src/config.py` and `.env`:
+     `CACHE_L2_TTL: int = 86400  # Default 24 hours (86,400 seconds); 0 disables TTL check (infinite)`
+
+2. Parameterized SQL Query with Temporal Filtering:
+   When `src/cache.py` queries `rag_semantic_cache`, it applies a strict temporal predicate:
+   ```sql
+   SELECT response_text, sources, images,
+          1 - (query_embedding <=> CAST(:embedding AS vector)) AS similarity
+   FROM rag_semantic_cache
+   WHERE 1 - (query_embedding <=> CAST(:embedding AS vector)) >= :threshold
+     AND (:ttl = 0 OR updated_at >= NOW() - (:ttl * INTERVAL '1 second'))
+   ORDER BY similarity DESC
+   LIMIT 1;
+   ```
+   If a matching query exists with cosine similarity >= 0.92, but its `updated_at` timestamp is older than `CACHE_L2_TTL` seconds, the database skips it and treats it as a cache miss.
+
+3. Physical Eviction & Purging:
+   To prevent dead rows from accumulating in PostgreSQL, we implemented `purge_expired_l2_cache()`:
+   ```python
+   def purge_expired_l2_cache(self) -> int:
+       if self.l2_ttl <= 0:
+           return 0
+       with self._engine.begin() as conn:
+           res = conn.execute(
+               text("DELETE FROM rag_semantic_cache WHERE updated_at < NOW() - (:ttl * INTERVAL '1 second');"),
+               {"ttl": self.l2_ttl}
+           )
+           return res.rowcount
+   ```
+   This can be triggered by scheduled cron jobs, background workers, or during administrative reindexing.
+
+4. Cache Telemetry:
+   `GET /api/cache/stats` exposes `ttl_seconds` under `l2_semantic_cache`, providing full observability into active cache retention policies."
+
+
+====================================================================================================
+PART 6: UNIFIED LITELLM GATEWAY, ROUTING & FALLBACK DYNAMICS
+====================================================================================================
+
+Q24: Why introduce an embedded LiteLLM Gateway instead of calling ChatGroq or provider APIs directly?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer assesses your architectural decoupling, resilience design, and understanding of enterprise API gateway patterns.
+
+Developer Answer:
+"Calling a single LLM provider SDK (like raw `ChatGroq` or raw `OpenAI`) directly inside application logic creates tight coupling and severe operational vulnerabilities:
+1. Single Point of Failure (SPOF): If Groq experiences an outage, network degradation, or HTTP 429 rate limiting, the entire RAG application crashes.
+2. Provider Lock-In: Switching or adding a secondary provider (Anthropic Claude, OpenAI, or local Ollama) requires refactoring prompt formats, SDK imports, and exception handling across multiple files.
+3. Inconsistent Parameter Governance: Token limits, timeouts, retry backoffs, and temperature controls end up scattered across different callers.
+
+Why we implemented an embedded LiteLLM Gateway (`src/gateway.py`):
+- Standardized Model Interface: LiteLLM provides a unified OpenAI-compatible abstraction across 100+ LLMs.
+- Automated Failover Chains: Enables transparent failover from a primary model to secondary/tertiary fallback models without application downtime.
+- Centralized Governance: Enforces maximum token limits (`LITELLM_MAX_TOKENS = 1500`), tool iteration limits (`MAX_TOOL_ITERATIONS = 5`), and execution timeouts in one configuration module.
+- Telemetry & Usage Tracking: Tracks total gateway calls, primary vs fallback invocations, and estimated token consumption across the application."
+
+
+Q25: How are primary and fallback models configured, and how does LiteLLM execute the failover chain?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your knowledge of high-availability routing, exception interception, and LangChain fallback mechanics.
+
+Developer Answer:
+"In `src/gateway.py`, we construct a dynamic failover chain using `langchain_community.chat_models.ChatLiteLLM` combined with LangChain's `.with_fallbacks()` runnable abstraction.
+
+Configuration via `.env`:
+```dotenv
+LITELLM_PRIMARY_MODEL=groq/qwen/qwen3.8-27b
+LITELLM_FALLBACK_MODELS=groq/openai/gpt-oss-20b
+LITELLM_MAX_TOKENS=1500
+LITELLM_TEMPERATURE=0.0
+LITELLM_TIMEOUT=30
+```
+
+Implementation Architecture:
+```python
+def get_gateway_llm(temperature=None, max_tokens=None) -> BaseChatModel:
+    effective_temp = temperature if temperature is not None else settings.LITELLM_TEMPERATURE
+    effective_tokens = max_tokens if max_tokens is not None else settings.LITELLM_MAX_TOKENS
+
+    # 1. Primary Model
+    primary_llm = ChatLiteLLM(
+        model=settings.LITELLM_PRIMARY_MODEL,
+        api_key=settings.GROQ_API_KEY,
+        temperature=effective_temp,
+        max_tokens=effective_tokens,
+        request_timeout=settings.LITELLM_TIMEOUT,
+    )
+
+    # 2. Fallback Models
+    fallback_llms = [
+        ChatLiteLLM(
+            model=model_name.strip(),
+            api_key=settings.GROQ_API_KEY,
+            temperature=effective_temp,
+            max_tokens=effective_tokens,
+            request_timeout=settings.LITELLM_TIMEOUT,
+        )
+        for model_name in settings.LITELLM_FALLBACK_MODELS.split(",") if model_name.strip()
+    ]
+
+    # 3. Failover Binding
+    return primary_llm.with_fallbacks(fallback_llms) if fallback_llms else primary_llm
+```
+
+How Failover Executes at Runtime:
+- The agent calls `primary_llm` (`qwen3.8-27b`).
+- If `qwen3.8-27b` returns HTTP 429 (Rate Limit), HTTP 500/503 (Server Error), or a network timeout after 30 seconds, `with_fallbacks` catches the exception.
+- It seamlessly re-routes the prompt and tool definitions to `gpt-oss-20b`.
+- The user request succeeds without throwing an exception or aborting the chat session."
+
+
+Q26: How does the gateway enforce token caps and prevent runaway tool loops?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is looking for cost control, denial-of-wallet prevention, and loop boundary conditions in agentic systems.
+
+Developer Answer:
+"In autonomous agent architectures, two catastrophic failure modes can drain enterprise budgets:
+1. Runaway Generation: The model enters a repetitive generation loop, producing tens of thousands of tokens before hitting max context length.
+2. Runaway Tool Loops: The model calls a search tool, gets confused, calls it again with a slightly different query, and repeats this indefinitely.
+
+How our Gateway & Agent stack enforces hard boundaries:
+- Token Capping: We enforce `LITELLM_MAX_TOKENS = 1500` directly on every `ChatLiteLLM` instance. Even if a model attempts to generate an exhaustive essay, the gateway truncates generation at 1500 tokens, bounding maximum cost per inference call.
+- Request Timeout: Configured at `request_timeout = 30` seconds. If an upstream provider hangs, the socket is severed, triggering either fallback routing or a clean error response.
+- Max Tool Iterations: Configured in `src/agent.py`:
+  `AgentExecutor(..., max_iterations=settings.MAX_TOOL_ITERATIONS)` (default = 5).
+  If the agent executes 5 tool interactions without reaching a final answer, `AgentExecutor` terminates the loop and forces the agent to synthesize a response from the context gathered so far."
+
+
+Q27: How is gateway telemetry tracked, and what does `/api/gateway/stats` expose?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your production monitoring setup for LLM gateways.
+
+Developer Answer:
+"To monitor model utilization, failover frequency, and token usage, `src/gateway.py` implements a thread-safe `GatewayMetrics` collector.
+
+Exposed via `GET /api/gateway/stats`:
+```json
+{
+  "gateway": "LiteLLM Embedded Gateway",
+  "status": "active",
+  "primary_model": "groq/qwen/qwen3.8-27b",
+  "fallback_models": ["groq/openai/gpt-oss-20b"],
+  "max_tokens_limit": 1500,
+  "max_tool_iterations": 5,
+  "request_timeout_seconds": 30,
+  "temperature": 0.0,
+  "telemetry": {
+    "total_gateway_calls": 38,
+    "primary_model_calls": 36,
+    "fallback_model_calls": 2,
+    "estimated_tokens_consumed": 28450
+  }
+}
+```
+
+Operational Value:
+- Proactive Health Signals: If `fallback_model_calls` spikes, it alerts engineers that the primary Groq model is experiencing rate limits or regional downtime.
+- Cost Forecasting: `estimated_tokens_consumed` provides real-time visibility into usage across teams."
+
+
+====================================================================================================
+PART 7: HYBRID SEARCH (BM25 SPARSE + PGVECTOR DENSE + RECIPROCAL RANK FUSION) & CROSS-ENCODER RE-RANKING
+====================================================================================================
+
+Q28: Why does pure dense semantic vector search fail on specific technical acronyms and exact keyword searches (e.g., 'sparse vs dense vector embeddings'), and how does Hybrid Search resolve this?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your understanding of retrieval failure modes, vocabulary mismatch, lexical vs semantic representation spaces, and why enterprise RAG requires hybrid search.
+
+Developer Answer:
+"In production RAG systems, relying exclusively on dense vector embeddings (such as `all-MiniLM-L6-v2` or `text-embedding-3-small`) leads to subtle and frustrating retrieval failures.
+
+The Dense Vector Search Blindspot:
+Dense embedding models map sentences into a continuous, dense 384- or 1536-dimensional manifold where Euclidean or Cosine distance represents semantic proximity. However:
+1. Vocabulary Mismatch & Smoothing: Dense embeddings tend to 'smooth out' distinct technical tokens. For example, queries like 'sparse vs dense in vector embeddings', 'GPT-4o vs Claude 3.5 Sonnet', or specific function names (`create_tool_calling_agent`) get mapped close to general text about 'embeddings' or 'agents'. The retriever frequently returns passages discussing dense vectors in general while completely missing passages that explicitly mention the word 'sparse'.
+2. Exact Token Matching: When a user queries a specific error code (`Errno 11001`), database identifier (`ai_notes_docs`), or specialized keyword, dense embeddings score chunks based on syntactic tone rather than the literal presence of that vital token.
+
+The Sparse Lexical Solution (BM25):
+Sparse lexical search (specifically BM25 - Best Matching 25) models documents as high-dimensional, sparse vectors based on exact term frequencies:
+$$\text{BM25}(D, Q) = \sum_{i=1}^{n} \text{IDF}(q_i) \cdot \frac{f(q_i, D) \cdot (k_1 + 1)}{f(q_i, D) + k_1 \cdot \left(1 - b + b \cdot \frac{|D|}{\text{avgdl}}
+\right)}$$
+- Parameters: $k_1 = 1.5$ (term frequency saturation), $b = 0.75$ (document length normalization).
+- Strength: If the word 'sparse' appears in the document, BM25 assigns it a massive non-zero weight based on Inverse Document Frequency ($\text{IDF}$).
+
+Hybrid Search Resolution:
+In `src/hybrid_retriever.py`, we implement a unified `HybridRetriever`:
+1. Executes dense pgvector search (HNSW cosine distance) to capture conceptual, high-level intent.
+2. Executes sparse `rank_bm25.BM25Okapi` search over tokenized document chunks to capture exact keyword matches and technical identifiers.
+3. Fuses both candidate lists using Reciprocal Rank Fusion (RRF), ensuring that passages satisfying both semantic intent and exact keywords rank at the very top."
+
+
+Q29: Walk through the mathematical formulation and implementation of Reciprocal Rank Fusion (RRF) in `src/hybrid_retriever.py`.
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer evaluates your knowledge of rank aggregation algorithms and why linear score combination is an anti-pattern for hybrid retrieval.
+
+Developer Answer:
+"When combining dense and sparse retrieval results, a naive developer might attempt to linearly add or multiply the scores:
+$$	ext{Score}_{	ext{naive}} = lpha \cdot 	ext{Score}_{	ext{dense}} + (1 - lpha) \cdot 	ext{Score}_{\text{BM25}}$$
+
+Why Linear Score Combination Fails in Practice:
+1. Incompatible Score Scales: Cosine similarity produces scores bounded strictly between $[-1, 1]$ (or $[0, 1]$ for normalized vectors). BM25 produces unbounded scores $[0, \infty)$ where the maximum score depends on document length, query length, and corpus size.
+2. Calibration Fragility: Any single parameter $lpha$ that works for 3-word queries breaks down on 15-word queries because the BM25 score magnitude scales non-linearly with query length.
+
+The Reciprocal Rank Fusion (RRF) Formulation:
+RRF is an unsupervised, scale-invariant rank aggregation algorithm developed by Cormack, Clarke, and Büttcher. Instead of combining raw score values, RRF operates purely on the ordinal ranks of items across disparate retriever lists:
+
+$$\text{RRF Score}(d) = \sum_{m \in M} \frac{w_m}{k + 	ext{rank}_m(d)}$$
+
+Where:
+- $M = \{	ext{dense}, 	ext{sparse}\}$: The set of retrieval models.
+- $	ext{rank}_m(d) \in \{1, 2, \dots, K\}$: The 1-based rank position of document $d$ in the result list of retriever $m$.
+- $k = 60$: A ranking constant empirically proven to prevent items at the very top of one list from completely dominating items that appear favorably across multiple lists.
+- $w_{	ext{dense}} = 0.5, w_{	ext{sparse}} = 0.5$: Balanced weights assigned to each retrieval modality.
+
+Implementation in `src/hybrid_retriever.py`:
+```python
+def retrieve(self, query: str, top_k: int = 4) -> List[Document]:
+    dense_docs = self.vector_store.similarity_search(query, k=top_k * 2)
+    sparse_docs = self.bm25_retriever.retrieve(query, top_k=top_k * 2)
+
+    rrf_scores = {}
+    doc_map = {}
+
+    # Accumulate Dense Ranks
+    for rank, doc in enumerate(dense_docs, start=1):
+        doc_id = doc.metadata.get("chunk_id", doc.page_content[:100])
+        doc_map[doc_id] = doc
+        rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (0.5 / (60 + rank))
+
+    # Accumulate Sparse Ranks
+    for rank, doc in enumerate(sparse_docs, start=1):
+        doc_id = doc.metadata.get("chunk_id", doc.page_content[:100])
+        doc_map[doc_id] = doc
+        rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (0.5 / (60 + rank))
+
+    # Sort descending by fused RRF score
+    sorted_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+    return [doc_map[doc_id] for doc_id in sorted_ids[:top_k]]
+```
+
+Benefits:
+- Zero hyperparameter calibration required.
+- Documents appearing in both dense and sparse retrieval receive a massive additive boost.
+- If a document is only found by BM25 (e.g. an exact acronym), it still achieves a competitive rank."
+
+
+Q30: What is the Cross-Encoder Re-Ranking Stage, how does it differ fundamentally from Bi-Encoder dense retrieval, and how is graceful non-blocking fallback guaranteed?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your advanced knowledge of two-stage retrieval architectures, transformer attention mechanics (Bi-Encoder vs Cross-Encoder), and production fault tolerance.
+
+Developer Answer:
+"In modern high-precision RAG systems, retrieval is structured as a two-stage funnel:
+1. Stage 1: Candidate Generation (High Recall): Fast retrieval (Hybrid Dense + BM25) surfaces top 10–20 candidates in ~15ms.
+2. Stage 2: Re-Ranking (High Precision): A Cross-Encoder model re-scores candidate passages to identify the top 4 most relevant chunks.
+
+Bi-Encoder vs Cross-Encoder Architecture:
+- Bi-Encoder (`sentence-transformers/all-MiniLM-L6-v2`):
+  - Encodes Query $Q$ into vector $\mathbf{u} = E(Q)$ and Document $D$ into vector $\mathbf{v} = E(D)$ completely independently.
+  - Similarity is calculated as a simple dot product: $S = \mathbf{u} \cdot \mathbf{v}$.
+  - Advantage: Ultra-fast ($O(1)$ lookup via HNSW index); document embeddings are pre-computed offline.
+  - Disadvantage: 'Information Bottleneck'—there is zero token-level cross-attention between query words and passage words during encoding.
+- Cross-Encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`):
+  - Ingests Query and Document concatenated as a single sequence: `[CLS] Query [SEP] Document [SEP]`.
+  - All 6 transformer layers apply full bidirectional self-attention across every query token and document token simultaneously.
+  - The `[CLS]` token output passes through a classification head yielding a logit score representing true relevance.
+  - Advantage: Captures complex sentence semantics, negations, prepositions, and exact contextual relationships that bi-encoders miss.
+  - Disadvantage: Computationally intensive ($O(N)$ transformer inferences at runtime), making it unsuitable for scanning millions of vectors, but ideal for re-ranking the top 10–20 candidates.
+
+Implementation in `src/hybrid_retriever.py`:
+```python
+class CrossEncoderReRanker:
+    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
+        from sentence_transformers import CrossEncoder
+        self.model = CrossEncoder(model_name)
+
+    def rerank(self, query: str, documents: List[Document], top_k: int = 4) -> List[Document]:
+        pairs = [[query, doc.page_content] for doc in documents]
+        scores = self.model.predict(pairs)
+        ranked = sorted(zip(documents, scores), key=lambda x: x[1], reverse=True)
+        return [doc for doc, score in ranked[:top_k]]
+```
+
+Graceful Non-Blocking Fallback Design:
+In enterprise systems, external model dependencies must never cause system outages:
+1. Lazy Loading & Error Handling: If model weights cannot be downloaded (e.g. offline sandbox, missing HF credentials, or network timeout), `CrossEncoderReRanker` catches exceptions gracefully:
+   ```python
+   try:
+       return self.reranker.rerank(query, candidates, top_k=top_k)
+   except Exception as e:
+       logger.warning("Re-ranking failed or unavailable (%s), falling back to RRF order.", e)
+       return candidates[:top_k]
+   ```
+2. Result: If the re-ranker is enabled, users get state-of-the-art precision; if it is unavailable or disabled via `RERANKING_ENABLED=false`, the system seamlessly returns the top RRF-fused documents with zero downtime."
+
+
+====================================================================================================
+PART 8: AGENTIC TOOL REASONING, BREADCRUMB CONTEXT & CITATION GROUNDING
+====================================================================================================
+
+Q31: How is the agent initialized, and how does it dynamically decide between single-hop and multi-hop retrieval?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer assesses your practical knowledge of LangChain's tool-calling agent loop and multi-step reasoning capabilities.
+
+Developer Answer:
+"In `src/agent.py`, the agent is built using `create_tool_calling_agent`:
+```python
+prompt = ChatPromptTemplate.from_messages([
+    ("system", SYSTEM_PROMPT),
+    ("human", "{input}"),
+    MessagesPlaceholder(variable_name="agent_scratchpad"),
+])
+agent = create_tool_calling_agent(llm, tools, prompt)
+agent_executor = AgentExecutor(agent=agent, tools=tools, max_iterations=5)
+```
+
+How Dynamic Single-Hop vs Multi-Hop Retrieval Works:
+1. User Query Ingestion:
+   - Example Single-Hop: 'What is vibe coding?'
+     - The agent recognizes this as a single factual concept. It executes `search_document(query="vibe coding definition")`.
+     - The retrieved chunk contains the complete definition.
+     - The agent terminates the loop and synthesizes the answer.
+2. Multi-Hop Query Execution:
+   - Example Multi-Hop: 'Compare the memory requirements of RAG versus Fine-Tuning.'
+     - The agent calls `search_document(query="RAG memory requirements")`.
+     - It receives passages detailing vector store RAM and embedding models.
+     - The agent evaluates its scratchpad and realizes it lacks detailed GPU VRAM specs for Fine-Tuning.
+     - It issues a second tool call: `search_document(query="Fine-Tuning VRAM GPU memory requirements")`.
+     - Having retrieved both sides of the comparison, it synthesizes an objective, grounded comparative table citing both sections."
+
+
+Q32: How does tool aliasing prevent agent hallucination of non-existent tools like `search_function`?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is probing real-world LLM quirk mitigation, specifically tool-name hallucination.
+
+Developer Answer:
+"A notorious issue with smaller reasoning models (20B–30B parameters) is tool name hallucination. Although the tool is declared as `search_document`, models occasionally hallucinate tool names like `search_function`, `document_search`, or `retrieve_context` based on pre-training priors.
+
+When an LLM invokes an undeclared tool name, standard LangChain raises an unhandled `ToolException` or crashes the execution loop.
+
+Our Tool Aliasing Guardrail in `src/tools.py`:
+1. We define the primary tool `@tool("search_document")`.
+2. We create explicit alias tool wrappers binding to the exact same retrieval logic:
+   ```python
+   @tool("search_function")
+   def search_function(query: str) -> str:
+       """Alias for search_document to prevent model hallucination crashes."""
+       return search_document.invoke({"query": query})
+   ```
+3. Both tools are registered in `get_tools()`.
+4. If the model emits `search_document`, it executes normally. If it hallucinates `search_function`, the alias catches the call, executes the retrieval, and returns the context without interrupting the user's turn."
+
+
+Q33: How does the system inject document context headers into retrieved passages, and why is this superior to raw text chunks?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your understanding of retrieval-augmented prompt engineering and lexical ambiguity resolution.
+
+Developer Answer:
+"In raw vector retrieval, chunks returned from the database often look like:
+`'Cost: $0.0004 per 1k tokens. Requires 16GB VRAM.'`
+Without knowing which model or method this applies to, the LLM is forced to guess, leading to hallucination.
+
+Our Context Injection Pattern:
+During ingestion, every chunk is prefixed with:
+`[Context: Parent Heading > Subheading] [Type: text|table|image]`
+
+When `search_document` returns chunks to the agent, it formats each chunk as:
+```text
+--- Passage 1 [Context: Advanced RAG > Hybrid Search > Reciprocal Rank Fusion] [Type: text] ---
+Reciprocal Rank Fusion (RRF) combines rankings from dense vector retrieval and sparse BM25 retrieval...
+Source: AI-Notes.docx
+
+--- Passage 2 [Context: Architecture Comparison > RAG vs Fine-Tuning] [Type: table] ---
+| Dimension | RAG | Fine-Tuning |
+| Cost | Low | High |
+Source: AI-Notes.docx
+```
+
+Why this is superior:
+1. Unambiguous Grounding: The LLM immediately associates the facts with the correct subject matter.
+2. Superior Answer Synthesis: The LLM can explicitly state: 'According to the section Advanced RAG > Hybrid Search...', significantly increasing user trust.
+3. Clean Citations: Enables the agent to fulfill the prompt directive to cite exact sections at the end of every answer."
+
+
+Q34: How are multimodal diagram citations and image metadata formatted for the client UI?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer evaluates how backend agent reasoning bridges with frontend visual UI components.
+
+Developer Answer:
+"When an architectural diagram is relevant to a query, our pipeline ensures the visual diagram is returned alongside the text explanation.
+
+1. Diagram Metadata Extraction:
+   - In `src/tools.py`, when a retrieved passage has `metadata["type"] == "image"`, the tool returns the caption and appends:
+     `[Image: image_25.png | Path: data/extracted_images/image_25.png]`
+2. Agent Response Formatting:
+   - The agent incorporates the image filename into its text explanation:
+     `'As illustrated in the HyDE architecture diagram (image_25.png), the workflow begins with...'`
+3. API Payload Extraction:
+   - In `src/api.py`, the endpoint inspects the agent's retrieved documents and output text for image references using regex: `r'image_\d+\.png'`.
+   - It maps these references to publicly accessible URLs: `http://localhost:8000/images/image_25.png`.
+   - The JSON response returns:
+     ```json
+     {
+       "question": "Show me the HyDE architecture",
+       "answer": "The HyDE architecture generates a hypothetical document...",
+       "images": [
+         {
+           "filename": "image_25.png",
+           "url": "/images/image_25.png",
+           "caption": "HyDE Retrieval Flowchart"
+         }
+       ]
+     }
+     ```
+4. Frontend Lightbox Rendering:
+   - The web UI (`static/index.html`) renders thumbnail cards under the answer. Clicking a thumbnail opens a high-resolution modal lightbox for full-screen inspection."
+
+
+====================================================================================================
+PART 9: REAL-TIME STREAMING (SERVER-SENT EVENTS SSE), FASTAPI BACKEND & EMBEDDED UI
+Q35: How is Real-Time Streaming implemented using Server-Sent Events (SSE / `StreamingResponse`), why is SSE chosen over WebSockets, and what is the event lifecycle protocol?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your knowledge of real-time web protocols, HTTP streaming, user perceived latency (Time-to-First-Token), and frontend streaming consumption.
+
+Developer Answer:
+"In generative AI applications, waiting 3 to 6 seconds for a full agentic response creates a poor user experience. To slash Time-to-First-Token (TTFT) and provide immediate user feedback, we implemented Real-Time Streaming using Server-Sent Events (SSE).
+
+Why Server-Sent Events (SSE) Over WebSockets:
+1. Unidirectional Simplicity: LLM streaming is inherently unidirectional (the client submits a query once, and the server pushes tokens back). WebSockets provide full-duplex communication, which adds unnecessary protocol complexity.
+2. Standard HTTP/1.1 & HTTP/2 Compatibility: SSE uses standard HTTP connections (`Content-Type: text/event-stream`), traversing corporate firewalls, reverse proxies, and API gateways (such as Azure APIM or Nginx) without special socket upgrading.
+3. Built-In Reconnection: Browsers natively support automated retry and reconnection on SSE connections via the `EventSource` / `fetch` readable stream API.
+
+Streaming Architecture in `src/api.py`:
+We provide `POST /api/ask/stream` and `GET /api/ask/stream?question=...` returning FastAPI's `StreamingResponse(media_type="text/event-stream")`.
+
+The SSE Event Lifecycle Protocol:
+The endpoint streams newline-delimited SSE chunks (`data: <json>
+
+`) across five distinct phases:
+1. Phase 1: Cache Verification (`type: status`, `stage: cache_check`)
+   - Emits: `{"type": "status", "stage": "cache_check", "message": "Checking hybrid cache..."}`
+   - If an L1 or L2 cache hit occurs: Immediately streams the cached text tokens and closes the stream with `done` in <40ms.
+2. Phase 2: Hybrid Retrieval (`type: status`, `stage: retrieving`)
+   - Emits: `{"type": "status", "stage": "retrieving", "message": "Searching documents (Hybrid BM25 + pgvector)..."}`
+   - Informs the user that document retrieval, RRF fusion, and Cross-Encoder re-ranking are executing.
+3. Phase 3: Generation Start (`type: status`, `stage: generating`)
+   - Emits: `{"type": "status", "stage": "generating", "message": "Generating response..."}`
+4. Phase 4: Token Streaming (`type: token`)
+   - Emits: `{"type": "token", "content": "..."}` as tokens are yielded by the LLM stream.
+5. Phase 5: Stream Completion (`type: done`)
+   - Emits: `{"type": "done", "answer": "...", "images": [...], "sources": [...], "cache_status": "Agent Reasoning (Hybrid + Cross-Encoder)"}`
+   - Provides final citations, multimodal diagram links, and status badges.
+
+Frontend Consumption in `static/index.html`:
+The browser consumes the stream using standard JavaScript `fetch()` and `ReadableStreamDefaultReader`:
+```javascript
+const response = await fetch('/api/ask/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question })
+});
+const reader = response.body.getReader();
+const decoder = new TextDecoder('utf-8');
+
+while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value);
+    // Parse 'data: {...}' lines, append tokens, and re-render Marked.js markdown
+}
+```
+Result: Users observe generation beginning in ~300ms, transforming perceived latency from seconds to milliseconds."
+====================================================================================================
+
+Q36: How is the FastAPI backend architected to achieve sub-300ms startup times?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer probes your performance optimization skills regarding Python process boot time and container cold starts.
+
+Developer Answer:
+"In naive Python AI applications, developers instantiate HuggingFace embedding models, PostgreSQL database connections, and LangChain agents at the root of the file (`global scope`).
+
+The Consequence:
+Importing `api.py` triggers PyTorch model weight loading, network handshakes to Neon PostgreSQL, and Groq API handshakes. The application takes 8 to 15 seconds just to start, causing container orchestrators (Kubernetes, Azure Container Apps) to fail readiness probes and kill the container.
+
+Our Sub-300ms Lazy Initialization Strategy:
+1. Root-Level Decoupling:
+   - No heavy models or database connections are created at import time.
+   - Global pointers are initialized to `None`: `_cached_agent = None`, `_cached_vector_store = None`.
+2. Thread-Safe Double-Checked Locking:
+   - In `src/agent.py` and `src/vector_store.py`, instances are created on-demand inside factory functions guarded by threading locks.
+3. Rapid Lifespan Startup:
+   - When Uvicorn boots `src/api.py`, it loads only standard library and FastAPI route definitions.
+   - Startup time benchmarks consistently at ~250–280ms.
+4. Background Warming:
+   - Readiness probes ping `GET /api/health`, which can optionally pre-warm the database connection asynchronously without blocking process boot."
+
+
+Q37: Walk through the REST endpoints exposed by `src/api.py` and their request/response contracts.
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your REST API design standards, error handling, and endpoint documentation.
+
+Developer Answer:
+"Our FastAPI backend exposes a clean, RESTful API surface documented via OpenAPI/Swagger (`/docs`):
+
+1. `POST /api/ask` (Primary User Interaction):
+   - Request: `{"question": "What is vibe coding?"}`
+   - Response: `{"question": "...", "answer": "...", "images": [...], "sources": [...], "cache_status": "L1 Cache Hit" | "L2 Semantic Cache Hit" | "Agent Reasoning"}`
+   - Full flow: L1 cache check -> L2 semantic cache check -> Agent tool execution -> Cache persistence -> Response.
+
+2. `POST /api/search` (Raw Semantic Vector Retrieval):
+   - Request: `{"query": "HyDE architecture", "top_k": 4}`
+   - Response: `{"query": "...", "total_results": 4, "results": [{"content": "...", "type": "image|text|table", "section": "...", "image_url": "..."}]}`
+   - Useful for debugging retrieval quality or feeding external client components.
+
+3. `GET /images/{filename}` (Static Media Server):
+   - Serves extracted diagrams (`image_01.png` - `image_36.png`) directly from `data/extracted_images/` with appropriate MIME headers and caching headers.
+
+4. `POST /api/reindex` (Administrative Re-Index):
+   - Re-parses `AI-Notes.docx`, regenerates embeddings, rebuilds the PostgreSQL `ai_notes_docs` table, flushes all caches, and returns indexing statistics.
+
+5. `GET /api/cache/stats` & `POST /api/cache/clear`:
+   - Inspects and purges L1 in-memory and L2 pgvector semantic caches.
+
+6. `GET /api/gateway/stats`:
+   - Returns LiteLLM primary/fallback health, token counts, and timeout metrics.
+
+7. `GET /api/health`:
+   - Liveness/readiness probe reporting PostgreSQL connectivity, total indexed chunks, and system uptime."
+
+
+Q38: Describe the embedded single-page chat UI architecture (`static/index.html`).
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer evaluates full-stack capability and how frontend user experiences are delivered without heavy Node.js build pipelines.
+
+Developer Answer:
+"To eliminate the complexity of separate React/Vue build pipelines, Node.js container dependencies, and CORS configuration issues, we built an embedded single-page chat application inside `static/index.html` served directly by FastAPI at `/`.
+
+Frontend Architecture:
+1. Zero-Build Lightweight Stack:
+   - Tailwind CSS (via CDN) for modern, responsive dark/light mode UI styling.
+   - Marked.js (via CDN) for instant client-side rendering of Markdown tables, code blocks, and lists.
+   - Lucide Icons (via CDN) for clean iconography.
+2. Dynamic Chat Bubbles & Cache Badges:
+   - Each assistant response displays a dynamic status badge:
+     - Green Badge: `⚡ L1 Cache Hit (<1ms)`
+     - Blue Badge: `🔍 L2 Semantic Cache Hit (~35ms)`
+     - Purple Badge: `🤖 LLM Agent Reasoning (Groq)`
+3. Image Lightbox Modal:
+   - When an answer references an architecture diagram, the UI renders an image preview card.
+   - Clicking the preview triggers a JavaScript modal lightbox with zoom and full-screen view.
+4. Auto-Scrolling & Error Resilience:
+   - Implements automated scroll-to-bottom, input debouncing, network error toasts, and quick-prompt suggestion chips for instant testing."
+
+
+Q39: How does the API handle CORS, static file mounting, and error handling?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is looking for production API hardening practices.
+
+Developer Answer:
+"In `src/api.py`, production hardening is implemented across three core areas:
+
+1. CORS (Cross-Origin Resource Sharing):
+   - Configured via FastAPI's `CORSMiddleware`:
+     ```python
+     app.add_middleware(
+         CORSMiddleware,
+         allow_origins=["*"],  # Restricted via settings in production
+         allow_credentials=True,
+         allow_methods=["*"],
+         allow_headers=["*"],
+     )
+     ```
+2. Static File Mounting:
+   - `app.mount("/static", StaticFiles(directory="static"), name="static")`
+   - `app.mount("/images", StaticFiles(directory="data/extracted_images"), name="images")`
+   - Enables high-performance static asset streaming without routing overhead.
+3. Centralized Exception Handling:
+   - Unhandled exceptions are caught by a global exception handler, logged with full stack traces, and returned to clients as structured JSON:
+     `{"detail": "Internal server error", "error_code": "RETRIEVAL_FAILED", "status_code": 500}`
+   - Sensitive database connection strings or API keys are never leaked in error payloads."
+
+
+====================================================================================================
+PART 10: RAGAS EVALUATION FRAMEWORK, QUALITY METRICS & HARNESS
+====================================================================================================
+
+Q40: How is the RAGAS evaluation harness implemented in `evaluation/ragas_eval.py`?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your automated testing methodology, MLOps rigor, and RAG benchmarking pipelines.
+
+Developer Answer:
+"RAG systems cannot be evaluated solely on unit tests; they require quantitative quality benchmarking using automated LLM-as-a-Judge frameworks. We implemented our evaluation harness in `evaluation/ragas_eval.py` using RAGAS (Retrieval Augmented Generation Assessment).
+
+Harness Workflow:
+1. Benchmark Testset (`evaluation/testset.json`):
+   - Contains curated question-and-ground-truth pairs spanning text definitions, comparative tables, and architecture diagrams.
+2. Live Pipeline Execution:
+   - The harness iterates over the testset, running each question through the live agent (`src.agent.build_agent`).
+   - Simultaneously, it calls `search_document.invoke({"query": question})` to capture the exact retrieved context passages passed into the agent.
+3. Dataset Assembly:
+   - Assembles a HuggingFace `Dataset` with four canonical columns:
+     `{"question": [...], "answer": [...], "contexts": [...], "ground_truth": [...]}`
+4. Automated Scoring via Gateway Judge:
+   - Evaluates the dataset using LiteLLM Gateway / ChatGroq as the Judge LLM and HuggingFace embeddings for semantic similarity.
+5. Reporting & Artifacts:
+   - Writes detailed per-question scores to `evaluation/results/ragas_eval_<timestamp>.csv`.
+   - Writes aggregate mean scores to `evaluation/results/ragas_eval_<timestamp>_summary.csv`."
+
+
+Q41: Explain the four primary RAGAS metrics evaluated and what aspects of the pipeline they validate.
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer wants a precise mathematical and conceptual understanding of RAGAS metrics.
+
+Developer Answer:
+"We evaluate our multimodal RAG pipeline across four complementary RAGAS metrics:
+
+1. Faithfulness (Measures Groundedness / Hallucination Rate):
+   - Definition: The proportion of claims in the generated answer that can be directly inferred from the retrieved context.
+   - Formula: $\text{Faithfulness} = \frac{|\text{Number of Claims in Answer Supported by Context}|}{|\text{Total Claims in Generated Answer}|}$
+   - Pipeline Target: $\ge 0.90$. A score of 1.0 means zero hallucinated claims.
+
+2. Answer Relevancy (Measures Query-Response Alignment):
+   - Definition: Evaluates whether the generated answer directly addresses the user's prompt without introducing irrelevant tangents.
+   - Computation: The Judge LLM generates $N$ synthetic questions from the generated answer, computes their embeddings, and calculates the mean cosine similarity against the original user question embedding.
+   - Pipeline Target: $\ge 0.85$.
+
+3. Context Precision (Measures Retriever Signal-to-Noise Ratio):
+   - Definition: Evaluates whether the most relevant chunks are ranked at the top of the retrieved context list.
+   - Formula: Mean Average Precision at $K$ ($\text{MAP}@K$) based on chunk relevance binary labels.
+   - Pipeline Target: $\ge 0.80$. Validates our HNSW index and dense embedding retrieval accuracy.
+
+4. Context Recall (Measures Information Completeness):
+   - Definition: Measures whether all key facts present in the ground truth answer were successfully retrieved in the context.
+   - Formula: $\text{Context Recall} = \frac{|\text{Ground Truth Sentences Attributed to Context}|}{|\text{Total Sentences in Ground Truth}|}$
+   - Pipeline Target: $\ge 0.85$. Validates chunk size and retrieval $K$ sufficiency."
+
+
+Q42: How does RAGAS evaluation integrate into a CI/CD regression testing pipeline?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer evaluates your DevOps / MLOps engineering practices for production releases.
+
+Developer Answer:
+"In enterprise software, any change to chunking parameters (`chunk_size`), embedding models, prompt instructions, or vector database indexes can silently degrade answer quality.
+
+Our CI/CD Benchmarking Pipeline:
+1. Automated Pull Request Trigger:
+   - A GitHub Actions workflow triggers on PRs modifying `src/chunker.py`, `src/document_loader.py`, `src/agent.py`, or `src/gateway.py`.
+2. Headless Evaluation Execution:
+   - Runs `python -m evaluation.ragas_eval --testset evaluation/testset.json`.
+3. Quality Assertion Gates:
+   - The CI script reads the generated summary CSV and enforces hard thresholds:
+     ```python
+     assert summary["faithfulness"] >= 0.85, "Faithfulness regression detected!"
+     assert summary["answer_relevancy"] >= 0.80, "Answer relevancy dropped below threshold!"
+     ```
+4. Build Artifacts:
+   - Summary CSVs are uploaded as GitHub Action run artifacts for historical trend analysis and regression auditing."
+
+
+====================================================================================================
+PART 11: PRODUCTION CLOUD DEPLOYMENT, AZURE APIM/CONTAINER APPS & DEVOPS
+====================================================================================================
+
+Q43: Describe the recommended production deployment architecture on Azure Cloud.
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is testing your cloud infrastructure architecture skills, specifically deploying containerized AI workloads on Microsoft Azure.
+
+Developer Answer:
+"For production deployment on Microsoft Azure, we recommend a secure, scalable architecture utilizing Azure Container Apps (ACA), Azure API Management (APIM), and Azure Database for PostgreSQL Flexible Server:
+
+```
+                      [External Users / Web Clients]
+                                     │ (HTTPS / TLS 1.3)
+                                     ▼
+                     ┌───────────────────────────────┐
+                     │ Azure API Management (APIM)   │
+                     │ - Edge Gateway & Rate Limiting│
+                     │ - Subscription Key Auth / JWT │
+                     │ - DDoS & WAF Protection       │
+                     └───────────────┬───────────────┘
+                                     │ (VNet Peering / Private Endpoint)
+                                     ▼
+                     ┌───────────────────────────────┐
+                     │ Azure Container Apps (ACA)    │
+                     │ - Dockerized FastAPI Backend  │
+                     │ - Auto-scale: 1 to 5 replicas │
+                     │ - KEDA HTTP-based scaling     │
+                     └───────┬───────────────┬───────┘
+                             │               │
+        (VNet Private Link)  │               │ (Encrypted Outbound HTTPS)
+                             ▼               ▼
+┌──────────────────────────────────────┐  ┌─────────────────────────────────┐
+│ Azure Database for PostgreSQL        │  │ Groq Cloud LPUs / LiteLLM APIs  │
+│ - Flexible Server with pgvector      │  │ - Primary: Qwen 2.5 27B         │
+│ - HNSW Vector Index & Semantic Cache │  │ - Fallback: GPT-OSS 20B         │
+└──────────────────────────────────────┘  └─────────────────────────────────┘
+```
+
+Key Architectural Highlights:
+1. Azure API Management (APIM): Serves as the public edge gateway. Handles rate limiting (e.g., 60 req/min per client), API key enforcement, and SSL offloading.
+2. Azure Container Apps (ACA): Fully managed Kubernetes (AKS) abstraction. Hosts our Linux Docker container with automatic zero-to-N scaling via KEDA.
+3. PostgreSQL Flexible Server: Enterprise-grade PostgreSQL with native `pgvector` extension and high availability.
+4. Azure Key Vault: Centralized secret management injecting `DATABASE_URL` and `GROQ_API_KEY` directly into ACA container environment variables."
+
+
+Q44: What startup command and environment configuration are required in Azure App Service / Container Apps?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your practical sysadmin and deployment experience on Azure App Service / ACA.
+
+Developer Answer:
+"When deploying to Azure App Service (Linux) or Azure Container Apps, developers frequently make two mistakes: hardcoding secrets in `.env` files inside Docker images and misconfiguring the startup entry point.
+
+1. Startup Command Configuration:
+   In Azure App Service -> Configuration -> General Settings -> Startup Command (or Docker `ENTRYPOINT`):
+   ```bash
+   uvicorn src.api:app --host 0.0.0.0 --port 8000 --workers 2 --timeout-keep-alive 65
+   ```
+   - `--host 0.0.0.0`: Essential for binding to container virtual network interfaces.
+   - `--port 8000`: Matches the default exposed container port (or Azure's `WEBSITES_PORT=8000`).
+   - `--workers 2`: Optimizes CPU utilization across container vCPUs.
+
+2. Environment Variables Configuration:
+   Never bake a `.env` file into the production Docker image. In Azure Portal -> App Service / Container App -> Configuration / Environment Variables:
+   - `DATABASE_URL`: `postgresql://appuser:<secret>@your-pg.postgres.database.azure.com:5432/postgres?sslmode=require`
+   - `PG_COLLECTION_NAME`: `ai_notes_docs`
+   - `GROQ_API_KEY`: `<your_groq_production_key>`
+   - `LITELLM_PRIMARY_MODEL`: `groq/qwen/qwen3.8-27b`
+   - `LITELLM_FALLBACK_MODELS`: `groq/openai/gpt-oss-20b`
+   - `LITELLM_MAX_TOKENS`: `1500`
+   - `LITELLM_TIMEOUT`: `30`
+   - `MAX_TOOL_ITERATIONS`: `5`
+   - `CACHE_ENABLED`: `true`
+   - `CACHE_SEMANTIC_THRESHOLD`: `0.92`"
+
+
+Q45: What are the pros, cons, and trade-offs of deploying behind Azure API Management (APIM) vs directly exposing the container?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer is looking for senior architectural reasoning regarding API gateways, edge security, cost, and latency.
+
+Developer Answer:
+"Placing an API gateway (like Azure APIM) in front of an AI backend involves significant architectural trade-offs:
+
+Advantages (Pros) of APIM:
+1. Enterprise Rate Limiting & Quota Management: Can restrict free-tier users to 10 queries/day while granting enterprise subscribers 500 queries/min, protecting downstream LLM APIs from bill shocks.
+2. Subscription Key & OAuth2 Management: Offloads authentication and client token validation from the FastAPI Python code to Azure's edge network.
+3. Centralized Request Logging & WAF: Comprehensive audit trails in Azure Monitor / Application Insights, and Web Application Firewall (WAF) filtering against SQL injection and prompt injection.
+
+Disadvantages (Cons) & Trade-offs:
+1. Added Network Latency: APIM introduces an additional reverse-proxy hop, adding ~15ms to 35ms of latency to each request.
+2. Cost Overhead: Dedicated APIM instances (Standard or Premium) carry substantial fixed monthly costs ($700 to $2,800/month). The Consumption tier is cheaper but introduces cold-start latency.
+3. SSE / Streaming Complexity: If streaming responses via Server-Sent Events (SSE), APIM gateway buffers must be carefully configured to avoid chunk buffering.
+
+Recommendation:
+For internal or prototype stages, expose Azure Container Apps directly via its built-in ingress. For public enterprise production with multi-tenant billing and strict SLA enforcement, deploy behind Azure APIM."
+
+
+====================================================================================================
+PART 12: ARCHITECTURAL TRADEOFFS, FAILURE MODES & EVOLUTIONARY ROADMAP
+====================================================================================================
+
+Q46: What are the primary failure modes of this multimodal RAG application, and how are they mitigated?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your real-world battle scars: how do you prevent the system from crashing under stress?
+
+Developer Answer:
+"In production, AI systems fail across multiple failure domains:
+
+1. Failure Mode: Upstream LLM Rate Limiting (HTTP 429) or Outages:
+   - Risk: Groq hits request-per-minute (RPM) or token-per-minute (TPM) limits.
+   - Mitigation: Our embedded LiteLLM Gateway catches 429 errors and automatically fails over to `groq/openai/gpt-oss-20b` without failing the user request.
+2. Failure Mode: Database Connection Pool Exhaustion:
+   - Risk: Bursts of concurrent queries exhaust PostgreSQL connection limits.
+   - Mitigation: SQLAlchemy connection pooling configured with `pool_size=10`, `max_overflow=20`, `pool_pre_ping=True`, and `pool_recycle=300`. Idle connections are automatically pruned, and broken sockets are recycled.
+3. Failure Mode: Image Extraction & Processing Failures:
+   - Risk: Corrupted image stream inside the `.docx` archive crashes `Pillow`.
+   - Mitigation: Defensive try/except blocks in `DocumentLoader` log image extraction warnings and proceed with text processing rather than aborting the entire document ingestion.
+4. Failure Mode: Model Tool Name Hallucination:
+   - Risk: Model calls `search_function` instead of `search_document`.
+   - Mitigation: Tool aliasing in `src/tools.py` catches common hallucinations and redirects them to the canonical search implementation."
+
+
+Q47: How does the system handle high concurrency and scaling across multiple worker instances?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer evaluates your understanding of horizontal scaling, stateless architectures, and distributed cache coherence.
+
+Developer Answer:
+"To scale horizontally across multiple container instances (e.g., 5 ACA replicas under KEDA auto-scaling), the application must maintain statelessness:
+
+1. Stateless Server Tier:
+   - FastAPI container instances maintain no sticky user sessions. Any container can serve any incoming request.
+2. Distributed Vector & Semantic Cache Tier:
+   - The L2 pgvector semantic cache resides in PostgreSQL. When Container 1 processes a query and writes to `rag_semantic_cache`, Container 2 and Container 3 immediately benefit from that semantic cache entry.
+3. L1 Cache Local Partitioning:
+   - The L1 in-memory `TTLCache` is local to each container process. This is intentional: memory reads stay within the local CPU L3 cache/RAM (<0.1ms). If higher cluster-wide cache coherence is required, the L1 layer can be swapped for a distributed Redis cluster using Redis TTL strings with zero changes to caller code.
+4. Connection Pooling:
+   - To prevent multiple replicas from overwhelming PostgreSQL, we utilize Neon’s built-in PgBouncer connection pooler (`pooler.c-14.us-east-1.aws.neon.tech`), allowing thousands of concurrent client connections over a compact physical database pool."
+
+
+Q48: What is the evolutionary architectural roadmap for this platform?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer wants to assess your forward-looking architectural vision, how you prioritize engineering investments, and your understanding of cutting-edge RAG advancements.
+
+Developer Answer:
+"Having successfully implemented our initial high-impact milestones—Hybrid Search (BM25 + pgvector + RRF), Cross-Encoder Re-Ranking (`ms-marco-MiniLM-L-6-v2`), Real-Time Server-Sent Events (SSE) Streaming, and L2 Semantic Cache Time-To-Cache Validity (`CACHE_L2_TTL`)—our evolutionary engineering roadmap focuses on four next-generation capabilities:
+
+1. Multi-Document Corpus & Polyglot Format Ingestion:
+   - Extend `src/document_loader.py` into a unified polyglot document ingestion engine supporting Microsoft Word (`.docx`), PDF (via PyMuPDF / MinerU), PowerPoint (`.pptx`), and Markdown/HTML.
+   - Maintain uniform hierarchical breadcrumbs (`[Context: Document > Section > Subsection]`) and multimodal visual extraction across all formats into PostgreSQL.
+
+2. Corrective RAG (CRAG) & Agentic Self-Reflection:
+   - Introduce an automated retrieval evaluator step between retrieval and synthesis: if retrieved passages exhibit low confidence or conflicting facts, trigger an autonomous query re-write or targeted web search fallback before prompting the generation model.
+
+3. GraphRAG (Knowledge Graph Hybrid Retrieval):
+   - Augment vector embeddings with an entity-relationship knowledge graph (using Neo4j or PostgreSQL recursive CTEs).
+   - Enables global multi-hop reasoning over connected entities (e.g. tracing dependencies between microservices or comparing architectural components across disparate documentation sections).
+
+4. Quantized On-Premises Cross-Encoder Inference:
+   - Quantize the cross-encoder re-ranking model using ONNX Runtime / TensorRT with INT8 precision.
+   - Slashes re-ranking latency from ~45ms down to <8ms on standard multi-core container CPUs, maximizing throughput under enterprise traffic."
+====================================================================================================
+END OF REFERENCE MANUAL
+====================================================================================================

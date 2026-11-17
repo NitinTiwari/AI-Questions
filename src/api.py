@@ -3,13 +3,14 @@ FastAPI application for Multimodal Agentic RAG over Word documents with PostgreS
 Provides endpoints for question-answering, semantic retrieval, document re-indexing,
 static image serving, and an embedded modern Chat UI for end users.
 """
+import asyncio
 import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -127,9 +128,10 @@ def serve_ui():
 
 @app.get("/api/health", tags=["Health"])
 def health():
-    """Health check, database collection statistics, and cache metrics."""
+    """Health check, database collection statistics, cache metrics, and LiteLLM gateway status."""
     from src.vector_store import get_collection_count
     from src.cache import get_cache_stats
+    from src.gateway import get_gateway_stats
     return {
         "status": "online",
         "app": "Multimodal Agentic RAG API",
@@ -137,6 +139,7 @@ def health():
         "collection": settings.PG_COLLECTION_NAME,
         "total_vectors": get_collection_count(),
         "cache": get_cache_stats(),
+        "gateway": get_gateway_stats(),
     }
 
 
@@ -210,7 +213,137 @@ def ask_question(request: AskRequest, req: Request):
         )
     except Exception as e:
         logger.exception("Error processing question in /api/ask")
+        err_str = str(e)
+        if "rate_limit" in err_str.lower() or "429" in err_str:
+            raise HTTPException(
+                status_code=429,
+                detail="Groq token rate limit reached. Please wait 10-15 seconds and try again.",
+            )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ask/stream", tags=["Streaming"])
+async def ask_question_stream(request: AskRequest, req: Request):
+    """
+    Server-Sent Events (SSE) streaming endpoint for Real-Time Q&A.
+    Emits status transitions, token-by-token generation chunks, and final metadata.
+    """
+    base_url = str(req.base_url).rstrip("/")
+
+    async def sse_generator():
+        import json
+        from src.cache import get_cached_response, set_cached_response
+        from src.gateway import get_gateway_llm
+        from src.hybrid_retriever import get_hybrid_retriever
+
+        # Ensure tools/retriever are initialized
+        get_agent()
+
+        # 1. Check L1 / L2 Caches
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'cache_check', 'message': 'Checking hybrid cache...'})}\n\n"
+        cached = get_cached_response(request.question)
+        if cached:
+            yield f"data: {json.dumps({'type': 'cache_hit', 'tier': cached.get('tier'), 'similarity': cached.get('similarity')})}\n\n"
+            answer_text = cached["answer"]
+            # Stream words with slight delay for realistic rendering
+            words = answer_text.split(" ")
+            for i, word in enumerate(words):
+                chunk = word + (" " if i < len(words) - 1 else "")
+                yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+                await asyncio.sleep(0.015)
+
+            yield f"data: {json.dumps({'type': 'done', 'answer': answer_text, 'images': cached.get('images', []), 'cached': True, 'tier': cached.get('tier')})}\n\n"
+            return
+
+        # 2. Hybrid Search Retrieval (BM25 + pgvector + Re-ranking)
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieving', 'message': 'Searching document with Hybrid Search (BM25 + pgvector + Re-ranking)...'})}\n\n"
+        
+        hybrid = get_hybrid_retriever()
+        if hybrid is not None:
+            retrieved_docs = hybrid.retrieve(request.question, top_k=settings.RETRIEVAL_TOP_K)
+        else:
+            from src.vector_store import get_vector_store
+            vs = get_vector_store()
+            retrieved_docs = vs.similarity_search(request.question, k=settings.RETRIEVAL_TOP_K)
+
+        images = []
+        context_passages = []
+        for i, doc in enumerate(retrieved_docs, start=1):
+            doc_type = doc.metadata.get("type", "text")
+            sec = doc.metadata.get("section", "General")
+            if doc_type == "image" and doc.metadata.get("image_path"):
+                img_name = Path(doc.metadata["image_path"]).name
+                images.append({
+                    "filename": img_name,
+                    "url": f"{base_url}/images/{img_name}",
+                    "section": sec,
+                })
+            context_passages.append(f"--- Passage {i} [{sec}] ---\n{doc.page_content}")
+
+        context_str = "\n\n".join(context_passages)
+
+        # 3. Stream Synthesis via LiteLLM Gateway
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'generating', 'message': 'Synthesizing grounded answer with LiteLLM Gateway...'})}\n\n"
+        
+        from langchain_core.messages import SystemMessage, HumanMessage
+        llm = get_gateway_llm()
+        
+        prompt_messages = [
+            SystemMessage(content=(
+                "You are an expert AI assistant that answers questions using ONLY the provided document context passages.\n"
+                "Rules:\n"
+                "- Directly answer the user's question using the retrieved passages.\n"
+                "- If the retrieved passages do not contain information to answer the question, clearly state: "
+                "\"Based on the indexed document (AI-Notes.docx), information about this topic was not found.\"\n"
+                "- Present comparisons cleanly (bullet points or tables).\n"
+                "- Cite the relevant section(s) at the end."
+            )),
+            HumanMessage(content=f"Context Passages:\n{context_str}\n\nUser Question: {request.question}"),
+        ]
+
+        accumulated_text = ""
+        try:
+            for chunk in llm.stream(prompt_messages):
+                token = chunk.content or ""
+                if token:
+                    accumulated_text += token
+                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                    await asyncio.sleep(0.005)
+        except Exception as e:
+            err_msg = str(e)
+            if "rate_limit" in err_msg.lower() or "429" in err_msg:
+                error_token = "\n\n*(Notice: Groq rate limit reached on free tier. Please wait 10-15 seconds and retry.)*"
+                accumulated_text += error_token
+                yield f"data: {json.dumps({'type': 'token', 'content': error_token})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'detail': err_msg})}\n\n"
+                return
+
+        # 4. Save to L1 & L2 caches on success
+        if accumulated_text:
+            set_cached_response(
+                query=request.question,
+                answer=accumulated_text,
+                images=images,
+            )
+
+        yield f"data: {json.dumps({'type': 'done', 'answer': accumulated_text, 'images': images, 'cached': False})}\n\n"
+
+    return StreamingResponse(
+        sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/ask/stream", tags=["Streaming"])
+async def ask_question_stream_get(question: str, req: Request):
+    """Convenience GET endpoint for Server-Sent Events (SSE) streaming."""
+    return await ask_question_stream(AskRequest(question=question), req)
 
 
 @app.post("/api/search", response_model=SearchResponse, tags=["Retrieval"])
@@ -223,8 +356,13 @@ def search_documents(request: SearchRequest, req: Request):
         from src.vector_store import get_vector_store
 
         k = request.top_k or settings.RETRIEVAL_TOP_K
-        vs = get_vector_store()
-        results = vs.similarity_search(request.query, k=k)
+        from src.hybrid_retriever import get_hybrid_retriever
+        hybrid = get_hybrid_retriever()
+        if hybrid is not None:
+            results = hybrid.retrieve(request.query, top_k=k)
+        else:
+            vs = get_vector_store()
+            results = vs.similarity_search(request.query, k=k)
         base_url = str(req.base_url).rstrip("/")
 
         items = []
@@ -299,6 +437,13 @@ def clear_cache():
     """Flush both L1 In-Memory and L2 PostgreSQL pgvector caches."""
     from src.cache import clear_all_caches
     return clear_all_caches()
+
+
+@app.get("/api/gateway/stats", tags=["LLM Gateway"])
+def gateway_stats():
+    """Get LiteLLM gateway routing, model hierarchy, and usage statistics."""
+    from src.gateway import get_gateway_stats
+    return get_gateway_stats()
 
 
 if __name__ == "__main__":

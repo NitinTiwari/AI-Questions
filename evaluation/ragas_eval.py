@@ -86,7 +86,12 @@ def evaluate_rag(testset_path: Path = DEFAULT_TESTSET) -> Path:
     dataset = Dataset.from_dict(data)
 
     # RAGAS needs its own LLM (for judgment) and embeddings (for similarity metrics).
-    judge_llm = ChatGroq(model=settings.GROQ_MODEL, api_key=settings.GROQ_API_KEY, temperature=0)
+    # Uses LiteLLM Gateway for unified model routing, token limits, and failover resilience.
+    try:
+        from src.gateway import get_gateway_llm
+        judge_llm = get_gateway_llm(temperature=0)
+    except Exception:
+        judge_llm = ChatGroq(model=settings.GROQ_MODEL, api_key=settings.GROQ_API_KEY, temperature=0)
     judge_embeddings = HuggingFaceEmbeddings(model_name=settings.HF_EMBEDDING_MODEL)
 
     metrics = [faithfulness, answer_relevancy, context_precision, context_recall]

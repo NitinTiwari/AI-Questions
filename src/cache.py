@@ -171,15 +171,28 @@ def get_cached_response(
         emb_str = _format_vector(q_emb)
 
         with engine.connect() as conn:
-            # Query the closest match by cosine distance (<=>)
-            query_sql = sqlalchemy.text("""
-                SELECT id, normalized_query, answer, images,
-                       1 - (query_embedding <=> CAST(:embedding AS vector)) AS similarity
-                FROM rag_semantic_cache
-                ORDER BY query_embedding <=> CAST(:embedding AS vector) ASC
-                LIMIT 1;
-            """)
-            result = conn.execute(query_sql, {"embedding": emb_str}).fetchone()
+            # Query the closest match by cosine distance (<=>) with L2 TTL validity check
+            if settings.CACHE_L2_TTL > 0:
+                query_sql = sqlalchemy.text("""
+                    SELECT id, normalized_query, answer, images,
+                           1 - (query_embedding <=> CAST(:embedding AS vector)) AS similarity
+                    FROM rag_semantic_cache
+                    WHERE updated_at >= NOW() - (:ttl * INTERVAL '1 second')
+                    ORDER BY query_embedding <=> CAST(:embedding AS vector) ASC
+                    LIMIT 1;
+                """)
+                params = {"embedding": emb_str, "ttl": settings.CACHE_L2_TTL}
+            else:
+                query_sql = sqlalchemy.text("""
+                    SELECT id, normalized_query, answer, images,
+                           1 - (query_embedding <=> CAST(:embedding AS vector)) AS similarity
+                    FROM rag_semantic_cache
+                    ORDER BY query_embedding <=> CAST(:embedding AS vector) ASC
+                    LIMIT 1;
+                """)
+                params = {"embedding": emb_str}
+
+            result = conn.execute(query_sql, params).fetchone()
 
             if result is not None:
                 sim = float(result.similarity)
@@ -306,6 +319,33 @@ def clear_all_caches() -> Dict[str, Any]:
     }
 
 
+def purge_expired_l2_cache() -> int:
+    """
+    Deletes expired rows from rag_semantic_cache whose updated_at exceeds CACHE_L2_TTL.
+    Returns the number of deleted expired entries.
+    """
+    if settings.CACHE_L2_TTL <= 0:
+        return 0
+
+    try:
+        from src.vector_store import get_engine
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            res = conn.execute(
+                sqlalchemy.text("""
+                    DELETE FROM rag_semantic_cache
+                    WHERE updated_at < NOW() - (:ttl * INTERVAL '1 second');
+                """),
+                {"ttl": settings.CACHE_L2_TTL},
+            )
+            conn.commit()
+            return res.rowcount or 0
+    except Exception as e:
+        logger.warning(f"Error purging expired L2 cache entries: {e}")
+        return 0
+
+
 def get_cache_stats() -> Dict[str, Any]:
     """Returns combined performance and utilization statistics for L1 & L2."""
     l1_stats = _l1_cache.stats()
@@ -336,5 +376,6 @@ def get_cache_stats() -> Dict[str, Any]:
         "l2_pgvector": {
             "cached_entries": l2_count,
             "total_hits": l2_total_hits,
+            "ttl_seconds": settings.CACHE_L2_TTL,
         },
     }
