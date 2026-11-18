@@ -88,6 +88,23 @@ class ThreadSafeTTLCache:
                 "last_hit_time": self.last_hit_time,
             }
 
+    def get_entries(self) -> List[Dict[str, Any]]:
+        """Returns a snapshot of all active (non-expired) entries in L1."""
+        now = time.time()
+        entries = []
+        with self._lock:
+            for key, (val, expire_at) in list(self._cache.items()):
+                remaining = round(expire_at - now)
+                if remaining > 0:
+                    entries.append({
+                        "query": key,
+                        "remaining_ttl_seconds": remaining,
+                        "expire_at": time.strftime("%H:%M:%S", time.localtime(expire_at)),
+                        "answer_preview": (val.get("answer") or "")[:200] + ("..." if len(val.get("answer") or "") > 200 else ""),
+                        "images_count": len(val.get("images") or []),
+                    })
+        return entries
+
 
 # Singleton L1 In-Memory Cache instance
 _l1_cache = ThreadSafeTTLCache(
@@ -245,27 +262,82 @@ def get_cached_response(
     return None
 
 
+TEMPORAL_PATTERNS = [
+    r"\btime\b",
+    r"\bdate\b",
+    r"\btoday\b",
+    r"\bnow\b",
+    r"\bcurrent\s+(time|date|weather|year|month)\b",
+]
+
+NEGATIVE_ANSWER_PATTERNS = [
+    "information about this topic was not found",
+    "was not found in the indexed document",
+    "not found in the indexed document",
+    "not found in",
+    "not found based on the provided document",
+    "no information found",
+    "not mentioned in the provided text",
+]
+
+
+def should_cache_response(query: str, answer: str) -> Tuple[bool, str]:
+    """
+    Evaluates whether a query-answer pair should be admitted into the semantic cache.
+    Rejects:
+    1. Temporal/volatile queries (e.g. 'what is time now', 'what is today's date')
+    2. Out-of-domain negative fallback responses ('information about this topic was not found')
+       unless explicitly allowed via settings.CACHE_NEGATIVE_RESPONSES.
+    """
+    if not settings.CACHE_ENABLED:
+        return False, "Caching is globally disabled"
+
+    q_lower = query.lower().strip()
+    # 1. Temporal / Real-time Query Check
+    if any(re.search(pat, q_lower) for pat in TEMPORAL_PATTERNS):
+        return False, "Skipped caching: Temporal / real-time query ('time/date/now' is dynamic and out-of-document)"
+
+    # 2. Negative Fallback / Out-of-Document Response Check
+    if not settings.CACHE_NEGATIVE_RESPONSES:
+        ans_lower = answer.lower()
+        if any(pat in ans_lower for pat in NEGATIVE_ANSWER_PATTERNS):
+            return False, "Skipped caching: Out-of-domain response (content was not found in indexed document)"
+
+    return True, "Valid for cache admission"
+
+
 def set_cached_response(
     query: str,
     answer: str,
     images: List[Dict[str, Any]],
-):
+) -> Dict[str, Any]:
     """
-    Stores a query-answer pair in both L1 (in-memory) and L2 (PostgreSQL pgvector) caches.
+    Stores a query-answer pair in both L1 (in-memory) and L2 (PostgreSQL pgvector) caches
+    if admitted by cache admission policy (should_cache_response).
+    Returns a dict with persistence telemetry:
+      {"cached": bool, "l1": bool, "l2": bool, "reason": str, "error": Optional[str]}
     """
     if not settings.CACHE_ENABLED:
-        return
+        return {"cached": False, "l1": False, "l2": False, "reason": "Caching is globally disabled"}
+
+    admitted, reason = should_cache_response(query, answer)
+    if not admitted:
+        logger.info(f"[Cache Admission Skipped] {reason} for query: '{query[:40]}...'")
+        return {"cached": False, "l1": False, "l2": False, "reason": reason}
 
     norm_q = normalize_query(query)
     if not norm_q:
-        return
+        return {"cached": False, "l1": False, "l2": False, "reason": "Normalized query is empty"}
 
     payload = {"answer": answer, "images": images}
 
     # 1. Store in L1 immediately
     _l1_cache.set(norm_q, payload)
+    l1_success = True
 
     # 2. Store in L2 (PostgreSQL pgvector)
+    l2_success = False
+    l2_error = None
     try:
         from src.vector_store import get_embeddings, get_engine
 
@@ -299,10 +371,20 @@ def set_cached_response(
                 },
             )
             conn.commit()
+            l2_success = True
             logger.info(f"[Cache Saved] Cached query in L1 & L2: '{norm_q[:40]}...'")
 
     except Exception as e:
+        l2_error = str(e)
         logger.warning(f"Error persisting answer to L2 pgvector cache: {e}")
+
+    return {
+        "cached": True,
+        "l1": l1_success,
+        "l2": l2_success,
+        "reason": "Stored successfully in L1 and L2" if l2_success else f"L1 stored, L2 failed: {l2_error}",
+        "error": l2_error,
+    }
 
 
 def clear_all_caches() -> Dict[str, Any]:
@@ -389,4 +471,57 @@ def get_cache_stats() -> Dict[str, Any]:
             "ttl_seconds": settings.CACHE_L2_TTL,
             "last_hit_time": _l2_last_hit_time,
         },
+    }
+
+
+def get_l1_cache_entries() -> Dict[str, Any]:
+    """Returns all active key-value entries currently cached in the L1 in-memory cache."""
+    entries = _l1_cache.get_entries()
+    return {
+        "tier": "in_memory",
+        "ttl_seconds": _l1_cache.ttl,
+        "maxsize": _l1_cache.maxsize,
+        "total_active_entries": len(entries),
+        "entries": entries,
+    }
+
+
+def get_l2_cache_entries(limit: int = 50) -> Dict[str, Any]:
+    """Returns persisted entries from PostgreSQL rag_semantic_cache."""
+    entries = []
+    try:
+        from src.vector_store import get_engine
+        engine = get_engine()
+        with engine.connect() as conn:
+            query = sqlalchemy.text("""
+                SELECT id, normalized_query, hit_count, created_at, updated_at,
+                       ROUND(EXTRACT(EPOCH FROM (NOW() - updated_at))) AS age_seconds,
+                       CASE WHEN updated_at >= NOW() - (:ttl * INTERVAL '1 second') THEN true ELSE false END AS is_valid,
+                       LEFT(answer, 200) AS answer_preview,
+                       coalesce(jsonb_array_length(images), 0) AS images_count
+                FROM rag_semantic_cache
+                ORDER BY updated_at DESC
+                LIMIT :limit;
+            """)
+            rows = conn.execute(query, {"ttl": settings.CACHE_L2_TTL, "limit": limit}).fetchall()
+            for r in rows:
+                entries.append({
+                    "id": r.id,
+                    "query": r.normalized_query,
+                    "hit_count": r.hit_count,
+                    "age_seconds": int(r.age_seconds or 0),
+                    "is_valid": bool(r.is_valid),
+                    "remaining_ttl_seconds": max(0, settings.CACHE_L2_TTL - int(r.age_seconds or 0)) if settings.CACHE_L2_TTL > 0 else None,
+                    "answer_preview": r.answer_preview,
+                    "images_count": r.images_count,
+                    "updated_at": r.updated_at.strftime("%Y-%m-%d %H:%M:%S") if r.updated_at else None,
+                })
+    except Exception as e:
+        logger.warning(f"Error fetching L2 cache entries: {e}")
+
+    return {
+        "tier": "pgvector",
+        "ttl_seconds": settings.CACHE_L2_TTL,
+        "total_returned": len(entries),
+        "entries": entries,
     }

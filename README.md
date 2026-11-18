@@ -17,7 +17,7 @@ Vectors are stored in **PostgreSQL (`pgvector`)** with an **HNSW index**, reason
 - **Unified LiteLLM Gateway**: Primary reasoning model (`groq/qwen/qwen3.8-27b`) with automated failover to (`groq/openai/gpt-oss-20b`), hard token capping (`1500 tokens`), tool iteration limits (`max_iterations=5`), and request timeouts (`30s`).
 - **2-Tier Hybrid Caching with TTL Validity**:
   - **Tier 1 (L1)**: In-Memory `TTLCache` (<1ms exact-match lookup, 2-hour TTL).
-  - **Tier 2 (L2)**: PostgreSQL `pgvector` Semantic Cache (~35ms cosine similarity matching $\ge 0.92$) backed by configurable Time-To-Cache validity (`CACHE_L2_TTL = 86400s / 24h`) and automated cleanup.
+  - **Tier 2 (L2)**: PostgreSQL `pgvector` Semantic Cache (~35ms cosine similarity matching $\ge 0.78$) backed by configurable Time-To-Cache validity (`CACHE_L2_TTL = 86400s / 24h`) and automated cleanup.
   - **Self-Healing L1 Promotion**: Automatically promotes L2 hits to L1.
 - **Agentic Reasoning & Tool Aliasing**: Autonomous LangChain tool-calling agent with hallucination guardrails (`search_document` and `search_function` alias).
 - **FastAPI Sub-300ms Backend**: Production REST endpoints with lazy singleton initialization, CORS middleware, and static asset streaming.
@@ -60,7 +60,7 @@ Dynamic Heading Stack          GitHub-Flavored Markdown       Pillow Byte Extrac
                      ┌─────────────────┴─────────────────┐
                      ▼                                   ▼
              [Tier 1: L1 Memory]                 [Tier 2: L2 pgvector]
-             MD5 Hash (<1ms hit)                 Cosine Sim >= 0.92 (~35ms)
+             MD5 Hash (<1ms hit)                 Cosine Sim >= 0.78 (~35ms)
                      │                           TTL Filter: updated_at >= NOW() - TTL
                      └─────────────────┬─────────────────┘
                                   (Cache Miss)
@@ -198,7 +198,7 @@ RETRIEVAL_TOP_K=4
 
 # 2-Tier Caching Configuration
 CACHE_ENABLED=true
-CACHE_SEMANTIC_THRESHOLD=0.92
+CACHE_SEMANTIC_THRESHOLD=0.78
 CACHE_L1_MAXSIZE=500
 CACHE_L1_TTL=7200
 CACHE_L2_TTL=86400  # L2 pgvector cache validity in seconds (24h; 0 = infinite)
@@ -281,9 +281,11 @@ uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload
 4. **`GET /images/{filename}`**: Static image host serving all 36 extracted diagrams (`image_01.png` - `image_36.png`).
 5. **`POST /api/reindex`**: Re-parses `.docx`, updates PostgreSQL vectors, and flushes all caches.
 6. **`GET /api/cache/stats`**: Real-time hit/miss rates, memory usage, L2 TTL validity, and persisted semantic cache count.
-7. **`POST /api/cache/clear`**: Flushes both L1 in-memory and L2 pgvector caches.
-8. **`GET /api/gateway/stats`**: LiteLLM gateway status, active models, failover counts, and token telemetry.
-9. **`GET /api/health`**: Database connectivity, indexed chunk count, and system status.
+7. **`GET /api/cache/l1/entries`**: Inspect all active in-memory queries, remaining TTL countdowns, and answer previews in server RAM.
+8. **`GET /api/cache/l2/entries`**: Inspect persisted semantic cache rows in PostgreSQL.
+9. **`POST /api/cache/clear`**: Flushes both L1 in-memory and L2 pgvector caches.
+10. **`GET /api/gateway/stats`**: LiteLLM gateway status, active models, failover counts, and token telemetry.
+11. **`GET /api/health`**: Database connectivity, indexed chunk count, and system status.
 
 ---
 

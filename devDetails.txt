@@ -47,7 +47,7 @@ Our Multimodal Agentic RAG system solves this holistically:
 - Multimodal Ingestion: Ingests .docx files, tracks hierarchical breadcrumbs (`[Context: Heading 1 > Heading 2]`), transforms tables into pristine GitHub-Flavored Markdown, and extracts embedded binary diagrams into local assets while synthesizing semantic captions via vision models.
 - Consolidated Storage: Stores 414 dense vector embeddings (384-dimensional) alongside rich metadata in a single, ACID-compliant PostgreSQL database using the `pgvector` extension with an HNSW index.
 - Agentic Tool Reasoning: Replaces static chains with an autonomous LangChain tool-calling agent (ChatGroq Qwen 2.5 27B / LiteLLM Gateway) that can iteratively search, refine queries, inspect tables, and synthesize grounded answers with explicit citations.
-- 2-Tier Caching: Deploys an ultra-fast L1 In-Memory TTLCache (<1ms) paired with an L2 PostgreSQL pgvector Semantic Cache (cosine similarity >= 0.92, ~30ms), slashing LLM token spend by up to 80% and delivering instantaneous responses for recurring queries."
+- 2-Tier Caching: Deploys an ultra-fast L1 In-Memory TTLCache (<1ms) paired with an L2 PostgreSQL pgvector Semantic Cache (cosine similarity >= 0.78, ~30ms), slashing LLM token spend by up to 80% and delivering instantaneous responses for recurring queries."
 
 
 Q2: What specific modalities and document artifacts does the system ingest, and what are the primary engineering challenges associated with each modality?
@@ -106,7 +106,7 @@ We balance latency and reasoning depth through a four-pillar optimization strate
 
 1. 2-Tier Multi-Level Caching:
    - Tier 1 (In-Memory TTLCache): Sub-millisecond (<1ms) response for exact repeated questions.
-   - Tier 2 (PostgreSQL pgvector Semantic Cache): Sub-50ms response for semantically equivalent or paraphrased questions (cosine similarity >= 0.92).
+   - Tier 2 (PostgreSQL pgvector Semantic Cache): Sub-50ms response for semantically equivalent or paraphrased questions (cosine similarity >= 0.78).
    - This completely bypasses the agent and LLM for a significant percentage of production traffic.
 
 2. Groq LPU (Language Processing Unit) Acceleration:
@@ -178,7 +178,7 @@ Developer Answer:
           |
           +---> [Tier 2: L2 pgvector Semantic Cache]
                    Compute 384-dim embedding
-                   Run cosine similarity search (threshold >= 0.92)
+                   Run cosine similarity search (threshold >= 0.78)
                    Hit? Promote to L1, return in ~35ms (Status: 'L2 Semantic Cache Hit')
           |
           | (Cache Miss)
@@ -576,7 +576,7 @@ In `src/cache.py`, we designed and implemented a 2-Tier Hybrid Cache:
          [Return in <1ms] ┌──────────────────────────────────┐
                           │  Tier 2: pgvector Semantic Cache │
                           │  - Compute 384-dim Query Vector  │
-                          │  - Cosine Sim >= 0.92 Threshold  │
+                          │  - Cosine Sim >= 0.78 Threshold  │
                           │  - Table: rag_semantic_cache     │
                           └───────────────┬──────────────────┘
                                           │
@@ -599,8 +599,8 @@ In `src/cache.py`, we designed and implemented a 2-Tier Hybrid Cache:
 2. Tier 2 (L2 PostgreSQL pgvector Semantic Cache):
    - Persistent relational table `rag_semantic_cache` in Neon PostgreSQL.
    - Stores user queries alongside their 384-dimensional dense embeddings and full JSON response payloads (answer text, sources, image links).
-   - Evaluates cosine similarity: if a past query exists with similarity >= 0.92, it returns the cached answer in ~30–45ms.
-   - Handles paraphrased queries ('What is vibe coding?' matches 'Explain vibe coding to me')."
+   - Evaluates cosine similarity: if a past query exists with similarity >= 0.78, it returns the cached answer in ~30–45ms.
+   - Handles paraphrased queries ('What is vibe coding?' matches 'Explain vibe coding to me'; 'what are the types of machine learning?' matches 'how many types of machine learning are present there noadays?')."
 
 
 Q19: How does the semantic cache perform similarity matching in PostgreSQL, and how does the SQL query work?
@@ -642,7 +642,31 @@ LIMIT 1;
 Key Architectural Details:
 1. Cosine Distance Operator `<=>`: In `pgvector`, `<=>` computes the cosine distance between two vectors. Therefore, $1 - (\mathbf{u} \Leftrightarrow \mathbf{v})$ computes the cosine similarity.
 2. ANSI Standard Casting: We use `CAST(:embedding AS vector)` rather than PostgreSQL shorthand `:embedding::vector`. In SQLAlchemy, double colons (`::`) conflict with bind parameter syntax, causing parsing exceptions.
-3. Threshold Tuning: We enforce `:threshold = 0.92`. Empirical testing demonstrated that a 0.92 threshold prevents false-positive cache hits across technical topics while reliably catching paraphrased questions."
+3. Threshold Tuning & Real-World Calibration (The 0.92 vs 0.78 Dilemma):
+   - Configured Parameter: `CACHE_SEMANTIC_THRESHOLD = 0.78` (in `.env` and `src/config.py`).
+   - The Root Cause of Duplicate Cache Insertion (Real-World Case Study):
+     Consider when a user submits two semantically related prompts in sequence:
+       Prompt 1: 'what are the types of machine learning?'
+       Prompt 2: 'how many types of machine learning are present there noadays?'
+     Under an overly strict threshold of `0.92`:
+       a. Prompt 1 executes through the agent and is stored in `rag_semantic_cache`.
+       b. When Prompt 2 arrives, `src/cache.py` generates its 384-dimensional dense vector (`all-MiniLM-L6-v2`) and computes cosine similarity against Prompt 1.
+       c. Mathematical Result:
+          Cosine Similarity = 0.7983 (~79.8%).
+       d. Because 0.7983 < 0.92, the L2 semantic cache evaluates Prompt 2 as a CACHE MISS!
+       e. Consequently, the application treats Prompt 2 as an un-cached query, invokes LLM reasoning, and saves Prompt 2 as a second redundant entry in `rag_semantic_cache`.
+   - Why do semantically similar queries score ~0.80 instead of >= 0.92?
+     1. Semantic Intent Shift: 'What are the types' is a qualitative request for category identities (Supervised, Unsupervised, RL); 'How many types are present' is a quantitative request for an entity count.
+     2. Lexical & Syntactic Divergence: Additional filler tokens ('how many', 'present there') pull the sentence representation into a slightly different vector space direction.
+     3. Typographical Noise: The typo 'noadays' (instead of 'nowadays') reduces similarity from 0.8378 down to 0.7983.
+     4. Vector Geometry Reality: In `all-MiniLM-L6-v2`, `0.92+` is an ultra-strict threshold matching only near-verbatim duplicate phrasing (e.g. 'What is vibe coding?' vs 'Explain vibe coding'). Natural conversational paraphrases with differing grammatical structures consistently cluster between 0.75 and 0.85.
+   - The Solution & Empirical Separation:
+     Tuning `CACHE_SEMANTIC_THRESHOLD = 0.78`:
+     - Allows Prompt 2 (0.7983 >= 0.78) to trigger an L2 Semantic Cache Hit, immediately returning Prompt 1's saved answer in ~35ms, promoting Prompt 2 to L1, and skipping database re-insertion.
+     - Safely discriminates genuinely distinct questions, which score far lower:
+       * Sim('Types of ML', 'Supervised vs Unsupervised differences') = 0.4024
+       * Sim('Types of ML', 'Explain gradient descent') = 0.3548
+     This strikes the optimal engineering balance: high conversational hit rates without false-positive collisions."
 
 
 Q20: What is the 'Self-Healing L1 Promotion' pattern, and why is it critical for throughput?
@@ -715,7 +739,7 @@ In `src/cache.py`, we track telemetry via a thread-safe `CacheStats` object and 
 ```json
 {
   "cache_enabled": true,
-  "semantic_threshold": 0.92,
+  "semantic_threshold": 0.78,
   "l1_memory_cache": {
     "current_size": 14,
     "max_size": 500,
@@ -737,7 +761,7 @@ In `src/cache.py`, we track telemetry via a thread-safe `CacheStats` object and 
 
 How this aids production operations:
 - Hit Rate Tracking: Displays total lookups, L1 hits, L2 hits, misses, and cumulative hit rate percentage.
-- Semantic Threshold Validation: If L2 hits remain 0 despite high traffic, the 0.92 threshold may be too strict; if users report inaccurate cached answers, it may be too loose.
+- Semantic Threshold Validation: If L2 hits remain 0 despite high traffic, the threshold may be too strict (e.g. 0.92, rejecting valid paraphrases like 0.798); if users report inaccurate cached answers, it may be too loose (< 0.75). Setting it to 0.78 balances conversational hit rates with topic precision.
 - Administrative Control: We provide `POST /api/cache/clear` to allow operations teams to immediately flush caches on demand without restarting the server."
 
 
@@ -780,7 +804,7 @@ We introduced configurable Time-To-Cache validity for the L2 pgvector semantic c
    ORDER BY similarity DESC
    LIMIT 1;
    ```
-   If a matching query exists with cosine similarity >= 0.92, but its `updated_at` timestamp is older than `CACHE_L2_TTL` seconds, the database skips it and treats it as a cache miss.
+   If a matching query exists with cosine similarity >= 0.78, but its `updated_at` timestamp is older than `CACHE_L2_TTL` seconds, the database skips it and treats it as a cache miss.
 
 3. Physical Eviction & Purging:
    To prevent dead rows from accumulating in PostgreSQL, we implemented `purge_expired_l2_cache()`:
@@ -860,7 +884,34 @@ Developer Answer:
    - Expiration Behavior:
      - Governed by `CACHE_L2_TTL = 86400` seconds (24 hours; `0` = infinite).
      - Logical Eviction: Queried with temporal predicate `WHERE updated_at >= NOW() - (:ttl * INTERVAL '1 second')`. Expired rows are ignored by PostgreSQL, triggering a fallback to the agent.
-     - Physical Eviction: The system provides `purge_expired_l2_cache()`, executing `DELETE FROM rag_semantic_cache WHERE updated_at < NOW() - (:ttl * INTERVAL '1 second');` to reclaim disk space."
+     - Physical Eviction: The system provides `purge_expired_l2_cache()`, executing `DELETE FROM rag_semantic_cache WHERE updated_at < NOW() - (:ttl * INTERVAL '1 second');` to reclaim disk space.
+
+3. Cache Admission Policy & Out-of-Domain Guardrails (`should_cache_response`):
+   - The Real-World Failure Scenario (e.g. Prompt: 'what is time now'):
+     When a user asks a question outside the scope of `AI-Notes.docx` (such as 'what is time now' or 'what is the weather'):
+     a. Retrieval finds irrelevant passages, and the LLM responds with a negative fallback:
+        'Based on the indexed document (AI-Notes.docx), information about this topic was not found.'
+     b. In naive architectures, this negative response is blindly written into `rag_semantic_cache`.
+     c. Severe Operational Anti-Patterns:
+        - Vector Space Pollution: Dead negative entries clutter the HNSW vector index.
+        - Temporal Query Stagnation: 'what is time now' is a real-time, volatile query. Caching a static 'not found' answer to a time query is fundamentally invalid and returns stale rejections to future users.
+        - Silent Database Write Failures: If the database write fails in a naive `try...except` block while the API reports 'completed', developers are misled into believing persistence succeeded.
+   - The Guardrail Implementation in `src/cache.py`:
+     We enforce a multi-rule Cache Admission Gate before any write occurs:
+     ```python
+     def should_cache_response(query: str, answer: str) -> Tuple[bool, str]:
+         # 1. Temporal / Real-time Query Check
+         if any(re.search(pat, query.lower()) for pat in TEMPORAL_PATTERNS):
+             return False, 'Skipped caching: Temporal / real-time query'
+         # 2. Negative Fallback / Out-of-Document Check
+         if not settings.CACHE_NEGATIVE_RESPONSES:
+             if any(pat in answer.lower() for pat in NEGATIVE_ANSWER_PATTERNS):
+                 return False, 'Skipped caching: Out-of-domain response'
+         return True, 'Valid for cache admission'
+     ```
+   - Telemetry Transparency:
+     - `set_cached_response()` returns structured telemetry (`cached`, `l1`, `l2`, `reason`, `error`).
+     - In the UI Left Dataflow Stepper, Step 5 dynamically reports `status: 'skipped'` (gray badge) when out-of-domain/temporal queries are bypassed, and `status: 'failed'` (red badge) with the exact database error if PostgreSQL write fails, rather than falsely displaying 'completed'."
 
 
 Q25: How can a developer or operations engineer inspect, verify, and monitor the TTL cache in real-time? Walk through the API, Database, CLI, and Web UI methods.
@@ -871,32 +922,38 @@ The interviewer tests your practical operational troubleshooting skills—how do
 Developer Answer:
 "In production AI architectures, caching must never be an unobservable black box. We provide four distinct methods to inspect and verify the cache state and TTL validity in real-time:
 
-1. Method 1: REST API Telemetry (`GET /api/cache/stats`):
-   - Access via cURL, Postman, browser, or Swagger UI (`http://localhost:8000/docs`):
+1. Method 1: REST API Inspection (`GET /api/cache/stats` and `GET /api/cache/l1/entries`):
+   - Access overall telemetry via `GET /api/cache/stats`:
      ```bash
      curl http://localhost:8000/api/cache/stats
      ```
-   - Live JSON Response:
+   - Inspect exact L1 in-memory cached questions, answers, and remaining TTLs via `GET /api/cache/l1/entries`:
+     ```bash
+     curl http://localhost:8000/api/cache/l1/entries
+     ```
+     Response format:
      ```json
      {
-       "cache_enabled": true,
-       "semantic_threshold": 0.92,
-       "l1_in_memory": {
-         "size": 3,
-         "maxsize": 500,
-         "ttl_seconds": 7200,
-         "hits": 14,
-         "misses": 5,
-         "hit_rate": 0.737
-       },
-       "l2_pgvector": {
-         "cached_entries": 8,
-         "total_hits": 18,
-         "ttl_seconds": 86400
-       }
+       "tier": "in_memory",
+       "ttl_seconds": 7200,
+       "maxsize": 500,
+       "total_active_entries": 1,
+       "entries": [
+         {
+           "query": "what is vibe coding",
+           "remaining_ttl_seconds": 6840,
+           "expire_at": "17:22:33",
+           "answer_preview": "Vibe coding is an emerging software development practice...",
+           "images_count": 0
+         }
+       ]
      }
      ```
-   - Operational Value: Instantly verifies the active TTLs (7200s for L1, 86400s for L2), total persisted semantic questions, and overall cache hit rate percentage.
+   - Operational Value: Provides full visibility into what exact questions and synthesized responses reside in server RAM without accessing the host machine console.
+
+2. Method 2: One-Click UI Inspection Modal (`static/index.html`):
+   - In the Left Observability Sidebar, the L1 Card includes a dedicated 'Inspect L1 Data' button.
+   - Clicking it triggers an interactive modal displaying all currently cached queries in RAM, their live remaining TTL countdowns (e.g. '6840s remaining'), and answer previews.
 
 2. Method 2: Direct PostgreSQL SQL Inspection (`rag_semantic_cache`):
    - Connect to the database via `psql`, DBeaver, or Neon Console:
@@ -933,7 +990,7 @@ Developer Answer:
 4. Method 4: Visual Embedded Chat UI Badges (`static/index.html`):
    - The user-facing chat UI renders dynamic status badges under each assistant message:
      - `⚡ L1 Cache Hit (<1ms)`: Green badge indicating an instant in-memory exact match.
-     - `🔍 L2 Semantic Cache Hit (~35ms)`: Blue badge indicating a PostgreSQL vector match ($\ge 0.92$).
+     - `🔍 L2 Semantic Cache Hit (~35ms)`: Blue badge indicating a PostgreSQL vector match ($\ge 0.78$).
      - `🤖 LLM Agent Reasoning`: Purple badge indicating a cache miss or expired TTL entry requiring fresh agent execution.
 
 5. Administrative Eviction Controls:
@@ -1466,7 +1523,7 @@ The interface is structured as a responsive split-screen layout pairing deep obs
 1. Left Sidebar: App Observability & Real-Time Dataflow Dashboard:
    - Separated 2-Tier Cache Telemetry:
      - Tier 1 (L1) In-Memory Card: Displays hits, misses, memory footprint (size / maxsize), TTL (7,200s), and the exact timestamp of 'When L1 Got Hit'.
-     - Tier 2 (L2) pgvector Semantic Card: Displays hits, total persisted entries in PostgreSQL, cosine threshold (&ge; 0.92), TTL validity (86,400s), and the exact timestamp of 'When L2 Got Hit'.
+     - Tier 2 (L2) pgvector Semantic Card: Displays hits, total persisted entries in PostgreSQL, cosine threshold (&ge; 0.78), TTL validity (86,400s), and the exact timestamp of 'When L2 Got Hit'.
      - Overall Cache Hit Rate badge calculated dynamically across total lookups.
    - LiteLLM Gateway & Token Usage Monitor:
      - Shows active Primary and Fallback model routing (`qwen3.8-27b` &rarr; `gpt-oss-20b`).
@@ -1673,7 +1730,7 @@ Developer Answer:
    - `LITELLM_TIMEOUT`: `30`
    - `MAX_TOOL_ITERATIONS`: `5`
    - `CACHE_ENABLED`: `true`
-   - `CACHE_SEMANTIC_THRESHOLD`: `0.92`"
+   - `CACHE_SEMANTIC_THRESHOLD`: `0.78`"
 
 
 Q47: What are the pros, cons, and trade-offs of deploying behind Azure API Management (APIM) vs directly exposing the container?

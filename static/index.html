@@ -262,6 +262,13 @@
               Got Hit:</span>
             <span class="font-mono text-emerald-300 font-medium" id="l1LastHit">None yet</span>
           </div>
+          <div class="mt-2 pt-1.5 border-t border-slate-800/60 flex items-center justify-between">
+            <span class="text-[10px] text-slate-500">In-Memory Snapshot</span>
+            <button onclick="inspectL1Cache()" class="text-[10px] text-emerald-400 hover:text-emerald-300 font-medium px-2 py-0.5 rounded bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800/60 flex items-center gap-1 transition">
+              <i data-lucide="eye" class="w-3 h-3"></i>
+              <span>Inspect L1 Data</span>
+            </button>
+          </div>
         </div>
 
         <!-- Tier 2: L2 pgvector Semantic Cache Card -->
@@ -287,13 +294,20 @@
             </div>
             <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
               <div class="text-[10px] text-slate-400">Threshold</div>
-              <div class="text-sm font-bold text-slate-300 font-mono">&ge; 0.92</div>
+              <div class="text-sm font-bold text-slate-300 font-mono" id="l2Threshold">&ge; 0.78</div>
             </div>
           </div>
           <div class="text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800/60 pt-1.5">
             <span class="flex items-center gap-1"><i data-lucide="clock" class="w-3 h-3 text-purple-400"></i> When L2
               Got Hit:</span>
             <span class="font-mono text-purple-300 font-medium" id="l2LastHit">None yet</span>
+          </div>
+          <div class="mt-2 pt-1.5 border-t border-slate-800/60 flex items-center justify-between">
+            <span class="text-[10px] text-slate-500">PostgreSQL Table</span>
+            <button onclick="inspectL2Cache()" class="text-[10px] text-purple-400 hover:text-purple-300 font-medium px-2 py-0.5 rounded bg-purple-950/80 hover:bg-purple-900 border border-purple-800/60 flex items-center gap-1 transition">
+              <i data-lucide="eye" class="w-3 h-3"></i>
+              <span>Inspect L2 Data</span>
+            </button>
           </div>
         </div>
       </div>
@@ -567,6 +581,37 @@
     </div>
   </div>
 
+  <!-- Cache Inspection Modal -->
+  <div id="cacheModal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-md hidden flex items-center justify-center p-4">
+    <div class="relative max-w-2xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+      <!-- Header -->
+      <div class="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900">
+        <div class="flex items-center gap-2">
+          <i data-lucide="database" class="w-4 h-4 text-emerald-400" id="cacheModalIcon"></i>
+          <span id="cacheModalTitle" class="text-sm font-semibold text-white">L1 In-Memory Cache Entries</span>
+          <span id="cacheModalCount" class="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono">0 entries</span>
+        </div>
+        <button onclick="closeCacheModal()" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Body -->
+      <div class="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-950/80" id="cacheModalContent">
+        <div class="text-xs text-slate-500 text-center py-6">Loading cached entries...</div>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-5 py-3 border-t border-slate-800 bg-slate-900/90 flex items-center justify-between text-xs text-slate-400">
+        <span id="cacheModalSubtitle">Snapshots are live from memory</span>
+        <button onclick="refreshActiveCacheModal()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center gap-1 border border-slate-700 transition">
+          <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+          <span>Refresh</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <script>
     lucide.createIcons();
 
@@ -593,6 +638,7 @@
     const l1LastHitEl = document.getElementById("l1LastHit");
     const l2HitsEl = document.getElementById("l2Hits");
     const l2EntriesEl = document.getElementById("l2Entries");
+    const l2ThresholdEl = document.getElementById("l2Threshold");
     const l2LastHitEl = document.getElementById("l2LastHit");
     const cacheOverallRateEl = document.getElementById("cacheOverallRate");
     const gwPrimaryEl = document.getElementById("gwPrimary");
@@ -670,6 +716,9 @@
           l2HitsEl.textContent = l2Hits;
           l2EntriesEl.textContent = l2Entries;
           l2LastHitEl.textContent = l2LastHit;
+          if (l2ThresholdEl && data.cache?.semantic_threshold !== undefined) {
+            l2ThresholdEl.innerHTML = `&ge; ${data.cache.semantic_threshold}`;
+          }
 
           // Overall Cache Rate
           const totalLookups = (l1Hits + l1Misses) + (l2Hits > 0 ? l2Hits : 0);
@@ -741,6 +790,8 @@
         dot.className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-slate-900";
       } else if (status === "skipped") {
         dot.className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-slate-600 border-2 border-slate-900";
+      } else if (status === "failed") {
+        dot.className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-rose-500 border-2 border-slate-900";
       }
     }
 
@@ -1148,8 +1199,145 @@
     });
 
     document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && !imageModal.classList.contains("hidden")) {
-        closeModal();
+      if (e.key === "Escape") {
+        if (!imageModal.classList.contains("hidden")) closeModal();
+        if (!document.getElementById("cacheModal").classList.contains("hidden")) closeCacheModal();
+      }
+    });
+
+    // Cache Inspection Modal Logic
+    let currentCacheTier = "l1";
+
+    window.inspectL1Cache = async function() {
+      currentCacheTier = "l1";
+      const modal = document.getElementById("cacheModal");
+      const title = document.getElementById("cacheModalTitle");
+      const count = document.getElementById("cacheModalCount");
+      const icon = document.getElementById("cacheModalIcon");
+      const content = document.getElementById("cacheModalContent");
+      const subtitle = document.getElementById("cacheModalSubtitle");
+
+      title.textContent = "Tier 1 (L1) In-Memory TTLCache Data";
+      subtitle.textContent = "Live entries stored in server RAM (TTL: 7,200s / 2 hours)";
+      icon.setAttribute("data-lucide", "zap");
+      icon.className = "w-4 h-4 text-emerald-400";
+      content.innerHTML = '<div class="text-xs text-slate-400 text-center py-8">Fetching live RAM entries...</div>';
+      modal.classList.remove("hidden");
+      lucide.createIcons();
+
+      try {
+        const res = await fetch("/api/cache/l1/entries");
+        const data = await res.json();
+        count.textContent = `${data.total_active_entries || 0} active`;
+
+        if (!data.entries || data.entries.length === 0) {
+          content.innerHTML = `
+            <div class="text-center py-8 text-slate-500 text-xs">
+              <p>No queries are currently cached in L1 memory.</p>
+              <p class="mt-1 text-[11px] text-slate-600">Submit a query in the chat to see it cached here!</p>
+            </div>
+          `;
+          return;
+        }
+
+        content.innerHTML = data.entries.map((item) => `
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 shadow-sm hover:border-emerald-500/40 transition">
+            <div class="flex items-center justify-between gap-2 mb-1.5">
+              <div class="flex items-center gap-1.5 truncate">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
+                <span class="font-mono text-xs text-emerald-300 font-semibold truncate">"${escapeHtml(item.query)}"</span>
+              </div>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/60 shrink-0">
+                ⏳ ${item.remaining_ttl_seconds}s remaining
+              </span>
+            </div>
+            <p class="text-xs text-slate-300 line-clamp-3 leading-relaxed bg-slate-950/60 p-2 rounded-lg border border-slate-800/70">
+              ${escapeHtml(item.answer_preview)}
+            </p>
+            <div class="flex items-center justify-between text-[10px] text-slate-500 mt-2 pt-1 border-t border-slate-800/60">
+              <span>Expires at: ${item.expire_at || '-'}</span>
+              <span>Images: ${item.images_count || 0}</span>
+            </div>
+          </div>
+        `).join("");
+      } catch (err) {
+        content.innerHTML = `<div class="text-center py-8 text-rose-400 text-xs">Error loading L1 entries: ${err.message}</div>`;
+      }
+      lucide.createIcons();
+    };
+
+    window.inspectL2Cache = async function() {
+      currentCacheTier = "l2";
+      const modal = document.getElementById("cacheModal");
+      const title = document.getElementById("cacheModalTitle");
+      const count = document.getElementById("cacheModalCount");
+      const icon = document.getElementById("cacheModalIcon");
+      const content = document.getElementById("cacheModalContent");
+      const subtitle = document.getElementById("cacheModalSubtitle");
+
+      title.textContent = "Tier 2 (L2) pgvector Semantic Cache Data";
+      subtitle.textContent = "PostgreSQL table: rag_semantic_cache (TTL: 86,400s / 24 hours)";
+      icon.setAttribute("data-lucide", "database");
+      icon.className = "w-4 h-4 text-purple-400";
+      content.innerHTML = '<div class="text-xs text-slate-400 text-center py-8">Fetching database rows...</div>';
+      modal.classList.remove("hidden");
+      lucide.createIcons();
+
+      try {
+        const res = await fetch("/api/cache/l2/entries");
+        const data = await res.json();
+        count.textContent = `${data.total_returned || 0} rows`;
+
+        if (!data.entries || data.entries.length === 0) {
+          content.innerHTML = `
+            <div class="text-center py-8 text-slate-500 text-xs">
+              <p>No queries persisted in PostgreSQL semantic cache table.</p>
+            </div>
+          `;
+          return;
+        }
+
+        content.innerHTML = data.entries.map((item) => `
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 shadow-sm hover:border-purple-500/40 transition">
+            <div class="flex items-center justify-between gap-2 mb-1.5">
+              <div class="flex items-center gap-1.5 truncate">
+                <span class="w-1.5 h-1.5 rounded-full ${item.is_valid ? 'bg-purple-400' : 'bg-rose-400'} shrink-0"></span>
+                <span class="font-mono text-xs text-purple-300 font-semibold truncate">"${escapeHtml(item.query)}"</span>
+              </div>
+              <span class="text-[10px] font-mono px-2 py-0.5 rounded ${item.is_valid ? 'bg-purple-950 text-purple-400 border border-purple-800/60' : 'bg-rose-950 text-rose-400 border border-rose-800/60'} shrink-0">
+                ${item.is_valid ? `Active (${item.remaining_ttl_seconds}s left)` : 'Expired'}
+              </span>
+            </div>
+            <p class="text-xs text-slate-300 line-clamp-3 leading-relaxed bg-slate-950/60 p-2 rounded-lg border border-slate-800/70">
+              ${escapeHtml(item.answer_preview)}
+            </p>
+            <div class="flex items-center justify-between text-[10px] text-slate-500 mt-2 pt-1 border-t border-slate-800/60">
+              <span>Hits: ${item.hit_count} &bull; Age: ${item.age_seconds}s</span>
+              <span>Images: ${item.images_count || 0}</span>
+            </div>
+          </div>
+        `).join("");
+      } catch (err) {
+        content.innerHTML = `<div class="text-center py-8 text-rose-400 text-xs">Error loading L2 entries: ${err.message}</div>`;
+      }
+      lucide.createIcons();
+    };
+
+    window.closeCacheModal = function() {
+      document.getElementById("cacheModal").classList.add("hidden");
+    };
+
+    window.refreshActiveCacheModal = function() {
+      if (currentCacheTier === "l1") {
+        inspectL1Cache();
+      } else {
+        inspectL2Cache();
+      }
+    };
+
+    document.getElementById("cacheModal").addEventListener("click", function(e) {
+      if (e.target === this) {
+        closeCacheModal();
       }
     });
 

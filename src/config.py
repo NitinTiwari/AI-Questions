@@ -51,7 +51,8 @@ class Settings:
     CACHE_L1_MAXSIZE: int = int(os.getenv("CACHE_L1_MAXSIZE", "500"))
     CACHE_L1_TTL: int = int(os.getenv("CACHE_L1_TTL", "7200"))
     CACHE_L2_TTL: int = int(os.getenv("CACHE_L2_TTL", "86400"))  # Vector cache validity in seconds (default 24h; 0=forever)
-    CACHE_SEMANTIC_THRESHOLD: float = float(os.getenv("CACHE_SEMANTIC_THRESHOLD", "0.92"))
+    CACHE_SEMANTIC_THRESHOLD: float = float(os.getenv("CACHE_SEMANTIC_THRESHOLD", "0.78"))
+    CACHE_NEGATIVE_RESPONSES: bool = os.getenv("CACHE_NEGATIVE_RESPONSES", "false").lower() in {"true", "1", "yes"}
 
     # --- LiteLLM Gateway Configuration ---
     LITELLM_PRIMARY_MODEL: str = os.getenv(

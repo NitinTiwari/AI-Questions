@@ -353,12 +353,19 @@ async def ask_question_stream(request: AskRequest, req: Request):
 
         # Step 5: Save to L1 & L2 caches on success
         if accumulated_text:
-            set_cached_response(
+            cache_res = set_cached_response(
                 query=request.question,
                 answer=accumulated_text,
                 images=images,
             )
-            yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 5, 'name': 'Cache Persistence', 'status': 'completed', 'detail': f'Stored synthesized response in L1 Memory (TTL: {settings.CACHE_L1_TTL}s) & L2 PostgreSQL table (TTL: {settings.CACHE_L2_TTL}s)', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
+            if not cache_res.get("cached"):
+                skip_reason = cache_res.get("reason", "Persistence skipped")
+                yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 5, 'name': 'Cache Persistence', 'status': 'skipped', 'detail': skip_reason, 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
+            elif not cache_res.get("l2"):
+                err_detail = cache_res.get("error", "Database write error")
+                yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 5, 'name': 'Cache Persistence', 'status': 'failed', 'detail': f'L1 memory saved, but L2 pgvector failed ({err_detail})', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 5, 'name': 'Cache Persistence', 'status': 'completed', 'detail': f'Stored synthesized response in L1 Memory (TTL: {settings.CACHE_L1_TTL}s) & L2 PostgreSQL table (TTL: {settings.CACHE_L2_TTL}s)', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
 
         total_elapsed = round((time.time() - start_time) * 1000, 1)
         yield f"data: {json.dumps({'type': 'done', 'answer': accumulated_text, 'images': images, 'cached': False, 'tokens': total_tokens, 'latency_ms': total_elapsed})}\n\n"
@@ -464,6 +471,20 @@ def cache_stats():
     """Get L1 In-Memory and L2 PostgreSQL pgvector cache statistics."""
     from src.cache import get_cache_stats
     return get_cache_stats()
+
+
+@app.get("/api/cache/l1/entries", tags=["Cache"])
+def get_l1_entries():
+    """Inspect active key-value entries currently cached in the L1 In-Memory TTL Cache."""
+    from src.cache import get_l1_cache_entries
+    return get_l1_cache_entries()
+
+
+@app.get("/api/cache/l2/entries", tags=["Cache"])
+def get_l2_entries(limit: int = 50):
+    """Inspect persisted entries in the L2 PostgreSQL pgvector Semantic Cache."""
+    from src.cache import get_l2_cache_entries
+    return get_l2_cache_entries(limit=limit)
 
 
 @app.post("/api/cache/clear", tags=["Cache"])
