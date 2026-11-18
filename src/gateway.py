@@ -18,6 +18,8 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 
+import time
+
 class GatewayMetrics:
     """Thread-safe telemetry tracker for LiteLLM Gateway."""
 
@@ -27,8 +29,10 @@ class GatewayMetrics:
         self.primary_calls = 0
         self.fallback_calls = 0
         self.total_tokens_estimated = 0
+        self.last_call_time: Optional[str] = None
+        self.last_model_used: Optional[str] = None
 
-    def record_call(self, is_fallback: bool = False, tokens: int = 0):
+    def record_call(self, is_fallback: bool = False, tokens: int = 0, model_name: Optional[str] = None):
         with self._lock:
             self.total_calls += 1
             if is_fallback:
@@ -36,6 +40,10 @@ class GatewayMetrics:
             else:
                 self.primary_calls += 1
             self.total_tokens_estimated += tokens
+            self.last_call_time = time.strftime("%H:%M:%S")
+            self.last_model_used = model_name or (
+                settings.LITELLM_FALLBACK_MODELS.split(",")[0].strip() if is_fallback else settings.LITELLM_PRIMARY_MODEL
+            )
 
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
@@ -58,6 +66,8 @@ class GatewayMetrics:
                     "primary_model_calls": self.primary_calls,
                     "fallback_model_calls": self.fallback_calls,
                     "estimated_tokens_consumed": self.total_tokens_estimated,
+                    "last_call_time": self.last_call_time,
+                    "last_model_used": self.last_model_used,
                 },
             }
 

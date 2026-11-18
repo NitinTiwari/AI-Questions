@@ -21,7 +21,7 @@ Vectors are stored in **PostgreSQL (`pgvector`)** with an **HNSW index**, reason
   - **Self-Healing L1 Promotion**: Automatically promotes L2 hits to L1.
 - **Agentic Reasoning & Tool Aliasing**: Autonomous LangChain tool-calling agent with hallucination guardrails (`search_document` and `search_function` alias).
 - **FastAPI Sub-300ms Backend**: Production REST endpoints with lazy singleton initialization, CORS middleware, and static asset streaming.
-- **Embedded Web UI**: Single-page modern interface styled with Tailwind CSS, Marked.js, Lucide icons, full-screen diagram lightbox modals, live streaming tokens, and cache indicator badges.
+- **Embedded Web UI with Left-Side Observability**: Single-page modern interface styled with Tailwind CSS, Marked.js, Lucide icons, full-screen diagram lightbox modals, and a dedicated **Left-Side Observability & Dataflow Dashboard** displaying live execution pipeline steps, separated L1 vs L2 cache hit timestamps, LiteLLM gateway tokens used, and recent query history.
 - **RAGAS Evaluation Framework**: Automated quality benchmarking across Faithfulness, Answer Relevancy, Context Precision, and Context Recall.
 
 ---
@@ -375,5 +375,5 @@ uvicorn src.api:app --host 0.0.0.0 --port 8000 --workers 2 --timeout-keep-alive 
 
 ## Developer Reference Manual
 
-For a complete 48-question, 12-part architectural and functional deep dive formatted as a Senior Developer & Interviewer Reference Guide, see:
+For a complete 50-question, 12-part architectural and functional deep dive formatted as a Senior Developer & Interviewer Reference Guide, see:
 - [devDetails.txt](file:///C:/Users/hp/AI/AI-Questions/devDetails.txt)

@@ -41,6 +41,7 @@ class ThreadSafeTTLCache:
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
+        self.last_hit_time: Optional[str] = None
 
     def get(self, key: str) -> Optional[Dict[str, Any]]:
         now = time.time()
@@ -50,6 +51,7 @@ class ThreadSafeTTLCache:
                 if now < expire_at:
                     self._cache.move_to_end(key)
                     self.hits += 1
+                    self.last_hit_time = time.strftime("%H:%M:%S")
                     return val
                 else:
                     del self._cache[key]
@@ -70,6 +72,7 @@ class ThreadSafeTTLCache:
             self._cache.clear()
             self.hits = 0
             self.misses = 0
+            self.last_hit_time = None
 
     def stats(self) -> Dict[str, Any]:
         with self._lock:
@@ -82,6 +85,7 @@ class ThreadSafeTTLCache:
                 "hits": self.hits,
                 "misses": self.misses,
                 "hit_rate": hit_rate,
+                "last_hit_time": self.last_hit_time,
             }
 
 
@@ -90,6 +94,8 @@ _l1_cache = ThreadSafeTTLCache(
     maxsize=settings.CACHE_L1_MAXSIZE,
     ttl=settings.CACHE_L1_TTL,
 )
+
+_l2_last_hit_time: Optional[str] = None
 
 
 def _format_vector(vector: List[float]) -> str:
@@ -213,6 +219,10 @@ def get_cached_response(
                         {"id": row_id},
                     )
                     conn.commit()
+
+                    # Record L2 last hit timestamp
+                    global _l2_last_hit_time
+                    _l2_last_hit_time = time.strftime("%H:%M:%S")
 
                     # Populate L1 cache so future identical queries hit L1
                     cached_payload = {"answer": ans, "images": imgs}
@@ -377,5 +387,6 @@ def get_cache_stats() -> Dict[str, Any]:
             "cached_entries": l2_count,
             "total_hits": l2_total_hits,
             "ttl_seconds": settings.CACHE_L2_TTL,
+            "last_hit_time": _l2_last_hit_time,
         },
     }

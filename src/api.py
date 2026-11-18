@@ -81,6 +81,8 @@ class AskResponse(BaseModel):
     cached: bool = Field(default=False, description="Whether this response was served from cache")
     cache_tier: Optional[str] = Field(default=None, description="'in_memory' or 'pgvector' if cached")
     similarity: Optional[float] = Field(default=None, description="Similarity score if retrieved from semantic cache")
+    tokens_used: Optional[int] = Field(default=None, description="Estimated total tokens used")
+    latency_ms: Optional[float] = Field(default=None, description="Execution latency in milliseconds")
 
 
 class SearchRequest(BaseModel):
@@ -232,30 +234,50 @@ async def ask_question_stream(request: AskRequest, req: Request):
 
     async def sse_generator():
         import json
-        from src.cache import get_cached_response, set_cached_response
-        from src.gateway import get_gateway_llm
+        import time
+        from src.cache import get_cached_response, set_cached_response, normalize_query
+        from src.gateway import get_gateway_llm, _metrics
         from src.hybrid_retriever import get_hybrid_retriever
 
         # Ensure tools/retriever are initialized
         get_agent()
+        start_time = time.time()
+        norm_q = normalize_query(request.question)
 
-        # 1. Check L1 / L2 Caches
+        # Step 1: Query Ingestion
+        yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 1, 'name': 'Query Ingestion', 'status': 'completed', 'detail': f'Normalized query: \"{norm_q[:60]}\"', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
+
+        # Step 2: Check L1 / L2 Caches
+        yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 2, 'name': 'Cache Inspection', 'status': 'running', 'detail': 'Checking L1 In-Memory TTL & L2 pgvector semantic cache...', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
         yield f"data: {json.dumps({'type': 'status', 'stage': 'cache_check', 'message': 'Checking hybrid cache...'})}\n\n"
+        
         cached = get_cached_response(request.question)
         if cached:
-            yield f"data: {json.dumps({'type': 'cache_hit', 'tier': cached.get('tier'), 'similarity': cached.get('similarity')})}\n\n"
+            tier_code = cached.get("tier")
+            is_l1 = (tier_code == "in_memory")
+            tier_label = "Tier 1 (L1) In-Memory TTLCache" if is_l1 else f"Tier 2 (L2) pgvector Semantic Cache (sim: {round(cached.get('similarity', 0.95)*100, 1)}%)"
+            elapsed_cache_ms = round((time.time() - start_time) * 1000, 1)
+
+            yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 2, 'name': 'Cache Inspection', 'status': 'hit', 'tier': tier_code, 'tier_label': tier_label, 'detail': f'HIT in {tier_label} ({elapsed_cache_ms}ms)', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
+            yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 3, 'name': 'LLM Gateway', 'status': 'skipped', 'detail': 'Bypassed external LLM API & DB search (served directly from cache)', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
+            yield f"data: {json.dumps({'type': 'cache_hit', 'tier': tier_code, 'similarity': cached.get('similarity'), 'latency_ms': elapsed_cache_ms})}\n\n"
+            
             answer_text = cached["answer"]
-            # Stream words with slight delay for realistic rendering
             words = answer_text.split(" ")
             for i, word in enumerate(words):
                 chunk = word + (" " if i < len(words) - 1 else "")
                 yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
-                await asyncio.sleep(0.015)
+                await asyncio.sleep(0.012)
 
-            yield f"data: {json.dumps({'type': 'done', 'answer': answer_text, 'images': cached.get('images', []), 'cached': True, 'tier': cached.get('tier')})}\n\n"
+            total_elapsed = round((time.time() - start_time) * 1000, 1)
+            yield f"data: {json.dumps({'type': 'done', 'answer': answer_text, 'images': cached.get('images', []), 'cached': True, 'tier': tier_code, 'tokens': 0, 'latency_ms': total_elapsed})}\n\n"
             return
 
-        # 2. Hybrid Search Retrieval (BM25 + pgvector + Re-ranking)
+        # Cache Miss
+        yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 2, 'name': 'Cache Inspection', 'status': 'miss', 'detail': 'Cache Miss in L1 & L2 (escalating to retrieval & LiteLLM Gateway)', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
+
+        # Step 3: Hybrid Search Retrieval (BM25 + pgvector + Re-ranking)
+        yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 3, 'name': 'Hybrid Search Retrieval', 'status': 'running', 'detail': 'Dense pgvector (HNSW) + Sparse BM25 + Reciprocal Rank Fusion + Re-Ranking...', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
         yield f"data: {json.dumps({'type': 'status', 'stage': 'retrieving', 'message': 'Searching document with Hybrid Search (BM25 + pgvector + Re-ranking)...'})}\n\n"
         
         hybrid = get_hybrid_retriever()
@@ -281,8 +303,10 @@ async def ask_question_stream(request: AskRequest, req: Request):
             context_passages.append(f"--- Passage {i} [{sec}] ---\n{doc.page_content}")
 
         context_str = "\n\n".join(context_passages)
+        yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 3, 'name': 'Hybrid Search Retrieval', 'status': 'completed', 'detail': f'Retrieved and re-ranked top {len(retrieved_docs)} passages from AI-Notes.docx', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
 
-        # 3. Stream Synthesis via LiteLLM Gateway
+        # Step 4: Stream Synthesis via LiteLLM Gateway
+        yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 4, 'name': 'LiteLLM Gateway Call', 'status': 'running', 'detail': f'Calling {settings.LITELLM_PRIMARY_MODEL} (Timeout: {settings.LITELLM_TIMEOUT}s, Max Tokens: {settings.LITELLM_MAX_TOKENS})', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
         yield f"data: {json.dumps({'type': 'status', 'stage': 'generating', 'message': 'Synthesizing grounded answer with LiteLLM Gateway...'})}\n\n"
         
         from langchain_core.messages import SystemMessage, HumanMessage
@@ -319,15 +343,25 @@ async def ask_question_stream(request: AskRequest, req: Request):
                 yield f"data: {json.dumps({'type': 'error', 'detail': err_msg})}\n\n"
                 return
 
-        # 4. Save to L1 & L2 caches on success
+        # Calculate estimated tokens
+        prompt_tokens = int(len(context_str.split()) * 1.33)
+        completion_tokens = int(len(accumulated_text.split()) * 1.33)
+        total_tokens = prompt_tokens + completion_tokens
+        _metrics.record_call(is_fallback=False, tokens=total_tokens)
+
+        yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 4, 'name': 'LiteLLM Gateway Call', 'status': 'completed', 'detail': f'Synthesized answer using ~{total_tokens} tokens (Prompt: ~{prompt_tokens}, Completion: ~{completion_tokens})', 'tokens': total_tokens, 'prompt_tokens': prompt_tokens, 'completion_tokens': completion_tokens, 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
+
+        # Step 5: Save to L1 & L2 caches on success
         if accumulated_text:
             set_cached_response(
                 query=request.question,
                 answer=accumulated_text,
                 images=images,
             )
+            yield f"data: {json.dumps({'type': 'dataflow_step', 'step': 5, 'name': 'Cache Persistence', 'status': 'completed', 'detail': f'Stored synthesized response in L1 Memory (TTL: {settings.CACHE_L1_TTL}s) & L2 PostgreSQL table (TTL: {settings.CACHE_L2_TTL}s)', 'timestamp': time.strftime('%H:%M:%S')})}\n\n"
 
-        yield f"data: {json.dumps({'type': 'done', 'answer': accumulated_text, 'images': images, 'cached': False})}\n\n"
+        total_elapsed = round((time.time() - start_time) * 1000, 1)
+        yield f"data: {json.dumps({'type': 'done', 'answer': accumulated_text, 'images': images, 'cached': False, 'tokens': total_tokens, 'latency_ms': total_elapsed})}\n\n"
 
     return StreamingResponse(
         sse_generator(),

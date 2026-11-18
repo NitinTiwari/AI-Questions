@@ -1,16 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Multimodal AI Knowledge Assistant</title>
-  
+
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  
+
   <!-- Marked for Markdown rendering -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  
+
   <!-- DOMPurify for XSS sanitation -->
   <script src="https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js"></script>
 
@@ -25,22 +26,28 @@
       margin: 1rem 0;
       font-size: 0.875rem;
     }
-    .prose th, .prose td {
+
+    .prose th,
+    .prose td {
       border: 1px solid #374151;
       padding: 0.5rem 0.75rem;
       text-align: left;
     }
+
     .prose th {
       background-color: #1f2937;
       font-weight: 600;
       color: #93c5fd;
     }
+
     .prose tr:nth-child(even) {
       background-color: #111827;
     }
+
     .prose tr:nth-child(odd) {
       background-color: #182234;
     }
+
     .prose pre {
       background-color: #0f172a;
       border: 1px solid #334155;
@@ -49,183 +56,492 @@
       overflow-x: auto;
       margin: 0.75rem 0;
     }
+
     .prose code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       color: #38bdf8;
       font-size: 0.85em;
     }
+
     .prose ul {
       list-style-type: disc;
       margin-left: 1.5rem;
       margin-top: 0.5rem;
       margin-bottom: 0.5rem;
     }
+
     .prose ol {
       list-style-type: decimal;
       margin-left: 1.5rem;
       margin-top: 0.5rem;
       margin-bottom: 0.5rem;
     }
+
     .prose p {
       margin-top: 0.5rem;
       margin-bottom: 0.5rem;
       line-height: 1.6;
     }
-    .prose h1, .prose h2, .prose h3 {
+
+    .prose h1,
+    .prose h2,
+    .prose h3 {
       font-weight: 700;
       color: #f3f4f6;
       margin-top: 1rem;
       margin-bottom: 0.5rem;
     }
-    .prose h1 { font-size: 1.35rem; }
-    .prose h2 { font-size: 1.2rem; }
-    .prose h3 { font-size: 1.05rem; }
+
+    .prose h1 {
+      font-size: 1.35rem;
+    }
+
+    .prose h2 {
+      font-size: 1.2rem;
+    }
+
+    .prose h3 {
+      font-size: 1.05rem;
+    }
+
     .prose blockquote {
       border-left: 4px solid #3b82f6;
       padding-left: 1rem;
       color: #9ca3af;
       margin: 0.75rem 0;
     }
+
     /* Scrollbar styling */
     ::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
+
     ::-webkit-scrollbar-track {
       background: #0f172a;
     }
+
     ::-webkit-scrollbar-thumb {
       background: #334155;
       border-radius: 3px;
     }
+
     ::-webkit-scrollbar-thumb:hover {
       background: #475569;
     }
   </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-blue-600 selection:text-white">
+
+<body
+  class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased selection:bg-blue-600 selection:text-white">
 
   <!-- Header -->
-  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-20 px-4 lg:px-8 py-3 flex items-center justify-between">
+  <header
+    class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-20 px-4 lg:px-6 py-2.5 flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-        <i data-lucide="brain" class="w-5 h-5 text-white"></i>
+      <!-- Mobile sidebar toggle -->
+      <button id="toggleSidebarBtn" title="Toggle Monitoring Dashboard"
+        class="lg:hidden p-1.5 rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition">
+        <i data-lucide="activity" class="w-4 h-4 text-blue-400"></i>
+      </button>
+
+      <div
+        class="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0">
+        <i data-lucide="brain" class="w-4 h-4 text-white"></i>
       </div>
       <div>
         <div class="flex items-center gap-2">
-          <h1 class="font-bold text-base lg:text-lg tracking-tight text-white">Multimodal AI Assistant</h1>
-          <span class="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">pgvector</span>
-          <span class="text-xs px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 font-medium flex items-center gap-1"><i data-lucide="shield-check" class="w-3 h-3"></i> LiteLLM Gateway</span>
+          <h1 class="font-bold text-sm lg:text-base tracking-tight text-white">Multimodal AI Assistant</h1>
+          <span
+            class="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">pgvector</span>
+          <span
+            class="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 font-medium flex items-center gap-1"><i
+              data-lucide="shield-check" class="w-3 h-3"></i> LiteLLM Gateway</span>
         </div>
-        <p class="text-xs text-slate-400">Agentic RAG over Word Docs, Markdown Tables & Architecture Diagrams</p>
+        <p class="text-[11px] text-slate-400 hidden sm:block">Agentic RAG &bull; Hybrid Search (BM25 + pgvector) &bull;
+          Re-Ranking &bull; 2-Tier TTL Cache</p>
       </div>
     </div>
 
     <!-- Header Actions & Status -->
-    <div class="flex items-center gap-3">
-      <div id="statusBadge" class="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+    <div class="flex items-center gap-2 lg:gap-3">
+      <div id="statusBadge"
+        class="hidden xl:flex items-center gap-2 px-3 py-1 rounded-full text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
         <span id="statusText">Connected</span>
       </div>
 
-      <a href="/docs" target="_blank" class="text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 border border-slate-700">
+      <a href="/docs" target="_blank"
+        class="text-xs font-medium px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 border border-slate-700">
         <i data-lucide="book-open" class="w-3.5 h-3.5"></i>
-        <span>API Docs</span>
+        <span class="hidden md:inline">API Docs</span>
       </a>
 
-      <button id="clearCacheBtn" title="Flush Caches (L1 & L2)" class="text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 border border-slate-700">
+      <button id="clearCacheBtn" title="Flush Caches (L1 & L2)"
+        class="text-xs font-medium px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 border border-slate-700">
         <i data-lucide="zap-off" class="w-3.5 h-3.5 text-amber-400"></i>
         <span class="hidden md:inline">Flush Cache</span>
       </button>
 
-      <button id="clearBtn" title="Clear Conversation" class="text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 border border-slate-700">
+      <button id="clearBtn" title="Clear Conversation"
+        class="text-xs font-medium px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center gap-1.5 border border-slate-700">
         <i data-lucide="trash-2" class="w-3.5 h-3.5 text-rose-400"></i>
-        <span class="hidden md:inline">Clear</span>
+        <span class="hidden md:inline">Clear Chat</span>
       </button>
 
-      <button id="reindexBtn" title="Re-index Document" class="text-xs font-medium px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-1.5 shadow-sm">
+      <button id="reindexBtn" title="Re-index Document"
+        class="text-xs font-medium px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-1.5 shadow-sm">
         <i data-lucide="refresh-cw" class="w-3.5 h-3.5" id="reindexIcon"></i>
         <span class="hidden md:inline">Re-index</span>
       </button>
     </div>
   </header>
 
-  <!-- Main Chat Container -->
-  <main class="flex-1 max-w-5xl w-full mx-auto p-4 lg:p-6 flex flex-col">
-    
-    <!-- Messages Scroll Area -->
-    <div id="chatMessages" class="flex-1 space-y-6 pb-6 overflow-y-auto">
-      
-      <!-- Welcome Hero Card -->
-      <div id="welcomeHero" class="bg-gradient-to-b from-slate-900 to-slate-900/60 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center my-6 shadow-xl">
-        <div class="w-14 h-14 mx-auto rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-4">
-          <i data-lucide="sparkles" class="w-7 h-7"></i>
-        </div>
-        <h2 class="text-xl sm:text-2xl font-bold text-white mb-2">How can I assist you with the AI Notes today?</h2>
-        <p class="text-sm text-slate-400 max-w-xl mx-auto mb-6">
-          I can synthesize facts from your notes, analyze structured model comparison tables, and retrieve technical architecture diagrams.
-        </p>
+  <!-- Split Screen Layout: Left Sidebar (Observability & Data Flow) + Right Main (Chat) -->
+  <div class="flex-1 flex overflow-hidden relative">
 
-        <!-- Suggested Prompt Pills -->
-        <div class="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto">
-          <button onclick="sendPrompt('What is vibe coding?')" class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
-            <span>💻</span>
-            <span>What is vibe coding?</span>
-          </button>
-          <button onclick="sendPrompt('Compare RAG vs Fine-Tuning in terms of Cost and Data Recency')" class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
-            <span>📊</span>
-            <span>Compare RAG vs Fine-Tuning</span>
-          </button>
-          <button onclick="sendPrompt('Explain the HyDE architecture diagram and how it works')" class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
-            <span>🖼️</span>
-            <span>HyDE architecture diagram</span>
-          </button>
-          <button onclick="sendPrompt('What are the main topics covered in this document?')" class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
-            <span>📚</span>
-            <span>Main topics overview</span>
+    <!-- LEFT SIDEBAR: App Observability, Cache Breakdown & Live Dataflow -->
+    <aside id="sidebar"
+      class="w-full sm:w-[420px] lg:w-[420px] shrink-0 border-r border-slate-800 bg-slate-900/95 lg:bg-slate-900/60 backdrop-blur flex flex-col h-[calc(100vh-57px)] overflow-y-auto hidden lg:flex z-30 absolute lg:relative inset-y-0 left-0 transition-all duration-300 shadow-2xl lg:shadow-none">
+
+      <!-- Sidebar Header -->
+      <div
+        class="p-3.5 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900/95 backdrop-blur z-10">
+        <div class="flex items-center gap-2">
+          <div class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></div>
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5">
+            <i data-lucide="activity" class="w-3.5 h-3.5 text-blue-400"></i>
+            <span>Observability & Dataflow</span>
+          </span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span
+            class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+            id="cacheOverallRate">0% Hit Rate</span>
+          <button id="closeSidebarBtn" class="lg:hidden p-1 text-slate-400 hover:text-white">
+            <i data-lucide="x" class="w-4 h-4"></i>
           </button>
         </div>
       </div>
 
-    </div>
+      <!-- SECTION 1: 2-Tier Cache Telemetry (L1 vs L2 Separated) -->
+      <div class="p-3.5 border-b border-slate-800/80 space-y-3">
+        <h3 class="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+          <i data-lucide="layers" class="w-3.5 h-3.5 text-blue-400"></i>
+          <span>Cache Breakdown &amp; Hit Timestamps</span>
+        </h3>
 
-    <!-- Thinking / Loading Indicator (Hidden by default) -->
-    <div id="thinkingIndicator" class="hidden mb-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-xs w-fit">
-      <div class="flex items-center gap-1.5">
-        <span class="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style="animation-delay: 0ms;"></span>
-        <span class="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style="animation-delay: 150ms;"></span>
-        <span class="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style="animation-delay: 300ms;"></span>
-      </div>
-      <span id="thinkingText">Searching PostgreSQL vectors & reasoning...</span>
-    </div>
+        <!-- Tier 1: L1 In-Memory TTLCache Card -->
+        <div
+          class="bg-slate-950/70 border border-emerald-500/30 rounded-xl p-3 shadow-sm hover:border-emerald-500/50 transition">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+              <span class="text-xs font-semibold text-emerald-300">Tier 1 (L1) In-Memory TTLCache</span>
+            </div>
+            <span
+              class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/50"
+              id="l1TtlBadge">TTL: 2h (7200s)</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-center text-xs mb-2">
+            <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
+              <div class="text-[10px] text-slate-400">L1 Hits</div>
+              <div class="text-sm font-bold text-emerald-400 font-mono" id="l1Hits">0</div>
+            </div>
+            <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
+              <div class="text-[10px] text-slate-400">L1 Misses</div>
+              <div class="text-sm font-bold text-slate-400 font-mono" id="l1Misses">0</div>
+            </div>
+            <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
+              <div class="text-[10px] text-slate-400">In RAM</div>
+              <div class="text-sm font-bold text-slate-300 font-mono" id="l1Size">0 / 500</div>
+            </div>
+          </div>
+          <div class="text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800/60 pt-1.5">
+            <span class="flex items-center gap-1"><i data-lucide="clock" class="w-3 h-3 text-emerald-400"></i> When L1
+              Got Hit:</span>
+            <span class="font-mono text-emerald-300 font-medium" id="l1LastHit">None yet</span>
+          </div>
+        </div>
 
-    <!-- Chat Input Form -->
-    <div class="sticky bottom-0 bg-slate-950 pt-2 pb-1">
-      <form id="chatForm" class="relative bg-slate-900 border border-slate-800 focus-within:border-blue-500 rounded-2xl shadow-2xl transition duration-200">
-        <textarea
-          id="userInput"
-          rows="1"
-          placeholder="Ask a question about AI notes, models, tables, or diagrams... (Shift+Enter for new line)"
-          class="w-full bg-transparent px-4 py-3.5 pr-14 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none max-h-40"
-        ></textarea>
-        <button
-          type="submit"
-          id="sendBtn"
-          class="absolute right-2.5 bottom-2.5 p-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:hover:bg-blue-600 transition shadow-md shadow-blue-600/30"
-        >
-          <i data-lucide="arrow-up" class="w-4 h-4"></i>
-        </button>
-      </form>
-      <div class="flex items-center justify-between text-[11px] text-slate-500 px-3 pt-2">
-        <span>Grounded strictly on <strong class="text-slate-400">AI-Notes.docx</strong></span>
-        <span>Powered by Groq & PostgreSQL pgvector</span>
+        <!-- Tier 2: L2 pgvector Semantic Cache Card -->
+        <div
+          class="bg-slate-950/70 border border-purple-500/30 rounded-xl p-3 shadow-sm hover:border-purple-500/50 transition">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+              <span class="text-xs font-semibold text-purple-300">Tier 2 (L2) pgvector Semantic</span>
+            </div>
+            <span
+              class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-950/60 text-purple-400 border border-purple-800/50"
+              id="l2TtlBadge">TTL: 24h (86400s)</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-center text-xs mb-2">
+            <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
+              <div class="text-[10px] text-slate-400">L2 Hits</div>
+              <div class="text-sm font-bold text-purple-400 font-mono" id="l2Hits">0</div>
+            </div>
+            <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
+              <div class="text-[10px] text-slate-400">Persisted</div>
+              <div class="text-sm font-bold text-slate-300 font-mono" id="l2Entries">0</div>
+            </div>
+            <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
+              <div class="text-[10px] text-slate-400">Threshold</div>
+              <div class="text-sm font-bold text-slate-300 font-mono">&ge; 0.92</div>
+            </div>
+          </div>
+          <div class="text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800/60 pt-1.5">
+            <span class="flex items-center gap-1"><i data-lucide="clock" class="w-3 h-3 text-purple-400"></i> When L2
+              Got Hit:</span>
+            <span class="font-mono text-purple-300 font-medium" id="l2LastHit">None yet</span>
+          </div>
+        </div>
       </div>
-    </div>
-  </main>
+
+      <!-- SECTION 2: LiteLLM Gateway & Token Monitor -->
+      <div class="p-3.5 border-b border-slate-800/80 space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+            <i data-lucide="shield-check" class="w-3.5 h-3.5 text-indigo-400"></i>
+            <span>LiteLLM Gateway &amp; Token Monitor</span>
+          </h3>
+          <span
+            class="text-[10px] font-mono text-indigo-400 px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20"
+            id="gwCapBadge">Cap: 1500 tokens</span>
+        </div>
+
+        <div class="bg-slate-950/70 border border-indigo-500/30 rounded-xl p-3 shadow-sm space-y-2">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-slate-400 text-[11px]">Primary Model:</span>
+            <span class="font-mono text-slate-200 font-medium text-[11px] truncate max-w-[200px]"
+              id="gwPrimary">qwen/qwen3.8-27b</span>
+          </div>
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-slate-400 text-[11px]">Fallback Failover:</span>
+            <span class="font-mono text-slate-400 text-[11px] truncate max-w-[200px]"
+              id="gwFallback">openai/gpt-oss-20b</span>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2 text-center text-xs pt-1">
+            <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
+              <div class="text-[10px] text-slate-400">LLM Hits</div>
+              <div class="text-sm font-bold text-indigo-400 font-mono" id="gwPrimaryCalls">0</div>
+            </div>
+            <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
+              <div class="text-[10px] text-slate-400">Failovers</div>
+              <div class="text-sm font-bold text-amber-400 font-mono" id="gwFallbackCalls">0</div>
+            </div>
+            <div class="bg-slate-900/80 rounded-lg p-1.5 border border-slate-800">
+              <div class="text-[10px] text-slate-400">Total Tokens</div>
+              <div class="text-sm font-bold text-cyan-400 font-mono" id="gwTokens">0</div>
+            </div>
+          </div>
+
+          <div class="text-[11px] text-slate-400 flex items-center justify-between border-t border-slate-800/60 pt-1.5">
+            <span class="flex items-center gap-1"><i data-lucide="clock" class="w-3 h-3 text-indigo-400"></i> When
+              Gateway Called:</span>
+            <span class="font-mono text-indigo-300 font-medium" id="gwLastCall">None yet</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- SECTION 3: Live Query Dataflow (Step-by-Step Pipeline) -->
+      <div class="p-3.5 border-b border-slate-800/80 space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+            <i data-lucide="git-commit" class="w-3.5 h-3.5 text-cyan-400"></i>
+            <span>Live Query Dataflow Trace</span>
+          </h3>
+          <span id="dataflowBadge"
+            class="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">Idle</span>
+        </div>
+
+        <!-- Vertical Stepper Container -->
+        <div
+          class="relative pl-5 space-y-3.5 before:content-[''] before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-800"
+          id="dataflowStepper">
+
+          <!-- Step 1: User Query Ingestion -->
+          <div class="relative group" id="dfStep1">
+            <div
+              class="absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-slate-700 border-2 border-slate-900 transition"
+              id="dfDot1"></div>
+            <div class="text-xs font-semibold text-slate-300 flex items-center justify-between">
+              <span>1. Query Ingestion</span>
+              <span class="text-[10px] font-mono text-slate-500" id="dfTime1">-</span>
+            </div>
+            <div class="text-[11px] text-slate-400 mt-0.5 font-mono break-all" id="dfDetail1">Awaiting prompt...</div>
+          </div>
+
+          <!-- Step 2: Cache Inspection -->
+          <div class="relative group" id="dfStep2">
+            <div
+              class="absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-slate-700 border-2 border-slate-900 transition"
+              id="dfDot2"></div>
+            <div class="text-xs font-semibold text-slate-300 flex items-center justify-between">
+              <span>2. 2-Tier Cache Inspection</span>
+              <span class="text-[10px] font-mono text-slate-500" id="dfTime2">-</span>
+            </div>
+            <div class="text-[11px] text-slate-400 mt-0.5" id="dfDetail2">Checks L1 memory MD5 (<1ms) &rarr; L2 pgvector
+                cosine</div>
+            </div>
+
+            <!-- Step 3: Hybrid Retrieval -->
+            <div class="relative group" id="dfStep3">
+              <div
+                class="absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-slate-700 border-2 border-slate-900 transition"
+                id="dfDot3"></div>
+              <div class="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                <span>3. Hybrid Retrieval &amp; RRF</span>
+                <span class="text-[10px] font-mono text-slate-500" id="dfTime3">-</span>
+              </div>
+              <div class="text-[11px] text-slate-400 mt-0.5" id="dfDetail3">pgvector dense + BM25 sparse &rarr; RRF
+                (k=60) &rarr; Re-Ranking</div>
+            </div>
+
+            <!-- Step 4: LiteLLM Gateway Call -->
+            <div class="relative group" id="dfStep4">
+              <div
+                class="absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-slate-700 border-2 border-slate-900 transition"
+                id="dfDot4"></div>
+              <div class="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                <span>4. LiteLLM Gateway Call</span>
+                <span class="text-[10px] font-mono text-slate-500" id="dfTime4">-</span>
+              </div>
+              <div class="text-[11px] text-slate-400 mt-0.5" id="dfDetail4">Routes to primary reasoning model (with
+                fallback guardrails)</div>
+            </div>
+
+            <!-- Step 5: Token Usage & Streaming -->
+            <div class="relative group" id="dfStep5">
+              <div
+                class="absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-slate-700 border-2 border-slate-900 transition"
+                id="dfDot5"></div>
+              <div class="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                <span>5. Token Telemetry</span>
+                <span class="text-[10px] font-mono text-slate-500" id="dfTime5">-</span>
+              </div>
+              <div class="text-[11px] text-slate-400 mt-0.5" id="dfDetail5">Tracks prompt &amp; completion tokens in
+                real-time</div>
+            </div>
+
+            <!-- Step 6: Cache Persistence -->
+            <div class="relative group" id="dfStep6">
+              <div
+                class="absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-slate-700 border-2 border-slate-900 transition"
+                id="dfDot6"></div>
+              <div class="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                <span>6. Cache Persistence</span>
+                <span class="text-[10px] font-mono text-slate-500" id="dfTime6">-</span>
+              </div>
+              <div class="text-[11px] text-slate-400 mt-0.5" id="dfDetail6">Saves generated response to L1 memory &amp;
+                L2 pgvector table</div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- SECTION 4: Recent Query Activity Log -->
+        <div class="p-3.5 space-y-2">
+          <div class="flex items-center justify-between">
+            <h3 class="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <i data-lucide="history" class="w-3.5 h-3.5 text-slate-400"></i>
+              <span>Recent Query Activity</span>
+            </h3>
+            <button onclick="clearActivityLog()"
+              class="text-[10px] text-slate-500 hover:text-slate-300 transition">Clear Log</button>
+          </div>
+          <div id="activityLog" class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+            <div class="text-[11px] text-slate-500 text-center py-3" id="emptyLogMsg">No queries logged yet.</div>
+          </div>
+        </div>
+
+    </aside>
+
+    <!-- RIGHT MAIN: Chat Container -->
+    <main class="flex-1 flex flex-col h-[calc(100vh-57px)] overflow-hidden max-w-5xl mx-auto w-full p-4 lg:p-6">
+
+      <!-- Messages Scroll Area -->
+      <div id="chatMessages" class="flex-1 space-y-6 pb-6 overflow-y-auto">
+
+        <!-- Welcome Hero Card -->
+        <div id="welcomeHero"
+          class="bg-gradient-to-b from-slate-900 to-slate-900/60 border border-slate-800 rounded-2xl p-6 sm:p-8 text-center my-4 shadow-xl">
+          <div
+            class="w-14 h-14 mx-auto rounded-2xl bg-blue-600/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-4">
+            <i data-lucide="sparkles" class="w-7 h-7"></i>
+          </div>
+          <h2 class="text-xl sm:text-2xl font-bold text-white mb-2">How can I assist you with the AI Notes today?</h2>
+          <p class="text-sm text-slate-400 max-w-xl mx-auto mb-6">
+            Synthesize facts, analyze structured comparison tables, and retrieve technical architecture diagrams with
+            real-time telemetry visible on the left.
+          </p>
+
+          <!-- Suggested Prompt Pills -->
+          <div class="flex flex-wrap justify-center gap-2 max-w-2xl mx-auto">
+            <button onclick="sendPrompt('What is vibe coding?')"
+              class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
+              <span>💻</span>
+              <span>What is vibe coding?</span>
+            </button>
+            <button onclick="sendPrompt('Compare RAG vs Fine-Tuning in terms of Cost and Data Recency')"
+              class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
+              <span>📊</span>
+              <span>Compare RAG vs Fine-Tuning</span>
+            </button>
+            <button onclick="sendPrompt('Explain the HyDE architecture diagram and how it works')"
+              class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
+              <span>🖼️</span>
+              <span>HyDE architecture diagram</span>
+            </button>
+            <button
+              onclick="sendPrompt('what is difference between sparse and dense in context of ai vector embedding?')"
+              class="text-xs px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700/60 transition flex items-center gap-2 hover:border-blue-500/50">
+              <span>⚡</span>
+              <span>Sparse vs Dense Embeddings</span>
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Thinking / Loading Indicator (Hidden by default) -->
+      <div id="thinkingIndicator"
+        class="hidden mb-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-xs w-fit">
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style="animation-delay: 0ms;"></span>
+          <span class="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style="animation-delay: 150ms;"></span>
+          <span class="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style="animation-delay: 300ms;"></span>
+        </div>
+        <span id="thinkingText">Searching PostgreSQL vectors &amp; reasoning...</span>
+      </div>
+
+      <!-- Chat Input Form -->
+      <div class="sticky bottom-0 bg-slate-950 pt-2 pb-1">
+        <form id="chatForm"
+          class="relative bg-slate-900 border border-slate-800 focus-within:border-blue-500 rounded-2xl shadow-2xl transition duration-200">
+          <textarea id="userInput" rows="1"
+            placeholder="Ask a question about AI notes, models, tables, or diagrams... (Shift+Enter for new line)"
+            class="w-full bg-transparent px-4 py-3.5 pr-14 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none max-h-40"></textarea>
+          <button type="submit" id="sendBtn"
+            class="absolute right-2.5 bottom-2.5 p-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 disabled:hover:bg-blue-600 transition shadow-md shadow-blue-600/30">
+            <i data-lucide="arrow-up" class="w-4 h-4"></i>
+          </button>
+        </form>
+        <div class="flex items-center justify-between text-[11px] text-slate-500 px-3 pt-2">
+          <span>Grounded on <strong class="text-slate-400">AI-Notes.docx</strong></span>
+          <span>LiteLLM &bull; BM25 &bull; pgvector &bull; Re-Ranking</span>
+        </div>
+      </div>
+    </main>
+
+  </div>
 
   <!-- Image Lightbox Modal -->
-  <div id="imageModal" class="fixed inset-0 z-50 bg-black/90 backdrop-blur-md hidden flex items-center justify-center p-4">
-    <div class="relative max-w-4xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+  <div id="imageModal"
+    class="fixed inset-0 z-50 bg-black/90 backdrop-blur-md hidden flex items-center justify-center p-4">
+    <div
+      class="relative max-w-4xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
       <!-- Modal Header -->
       <div class="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900">
         <div class="flex items-center gap-2">
@@ -233,11 +549,13 @@
           <span id="modalTitle" class="text-sm font-semibold text-white truncate max-w-lg">Diagram Preview</span>
         </div>
         <div class="flex items-center gap-2">
-          <a id="modalOpenTab" href="#" target="_blank" class="text-xs px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center gap-1 border border-slate-700">
+          <a id="modalOpenTab" href="#" target="_blank"
+            class="text-xs px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center gap-1 border border-slate-700">
             <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
             <span>Full Size</span>
           </a>
-          <button onclick="closeModal()" class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
+          <button onclick="closeModal()"
+            class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
             <i data-lucide="x" class="w-5 h-5"></i>
           </button>
         </div>
@@ -263,20 +581,55 @@
     const reindexBtn = document.getElementById("reindexBtn");
     const statusText = document.getElementById("statusText");
 
+    // Sidebar & Mobile Toggle Elements
+    const sidebar = document.getElementById("sidebar");
+    const toggleSidebarBtn = document.getElementById("toggleSidebarBtn");
+    const closeSidebarBtn = document.getElementById("closeSidebarBtn");
+
+    // Telemetry DOM Elements
+    const l1HitsEl = document.getElementById("l1Hits");
+    const l1MissesEl = document.getElementById("l1Misses");
+    const l1SizeEl = document.getElementById("l1Size");
+    const l1LastHitEl = document.getElementById("l1LastHit");
+    const l2HitsEl = document.getElementById("l2Hits");
+    const l2EntriesEl = document.getElementById("l2Entries");
+    const l2LastHitEl = document.getElementById("l2LastHit");
+    const cacheOverallRateEl = document.getElementById("cacheOverallRate");
+    const gwPrimaryEl = document.getElementById("gwPrimary");
+    const gwFallbackEl = document.getElementById("gwFallback");
+    const gwPrimaryCallsEl = document.getElementById("gwPrimaryCalls");
+    const gwFallbackCallsEl = document.getElementById("gwFallbackCalls");
+    const gwTokensEl = document.getElementById("gwTokens");
+    const gwLastCallEl = document.getElementById("gwLastCall");
+    const dataflowBadgeEl = document.getElementById("dataflowBadge");
+    const activityLogEl = document.getElementById("activityLog");
+
     // Modal Elements
     const imageModal = document.getElementById("imageModal");
     const modalImg = document.getElementById("modalImg");
     const modalTitle = document.getElementById("modalTitle");
     const modalOpenTab = document.getElementById("modalOpenTab");
 
+    // Mobile Sidebar Toggle Handlers
+    if (toggleSidebarBtn) {
+      toggleSidebarBtn.addEventListener("click", () => {
+        sidebar.classList.toggle("hidden");
+      });
+    }
+    if (closeSidebarBtn) {
+      closeSidebarBtn.addEventListener("click", () => {
+        sidebar.classList.add("hidden");
+      });
+    }
+
     // Auto-resize textarea
-    userInput.addEventListener("input", function() {
+    userInput.addEventListener("input", function () {
       this.style.height = "auto";
       this.style.height = (this.scrollHeight) + "px";
     });
 
     // Enter to submit (Shift+Enter for newline)
-    userInput.addEventListener("keydown", function(e) {
+    userInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         chatForm.dispatchEvent(new Event("submit"));
@@ -284,29 +637,150 @@
     });
 
     // Quick prompt sender
-    window.sendPrompt = function(promptText) {
+    window.sendPrompt = function (promptText) {
       userInput.value = promptText;
       userInput.style.height = "auto";
       chatForm.dispatchEvent(new Event("submit"));
     };
 
-    // Load initial health / collection status
+    // Load initial health / cache / gateway telemetry
     async function loadStats() {
       try {
         const res = await fetch("/api/health");
         if (res.ok) {
           const data = await res.json();
-          const l1Hits = data.cache?.l1_in_memory?.hits || 0;
-          const l2Hits = data.cache?.l2_pgvector?.total_hits || 0;
+
+          // L1 Cache Stats
+          const l1 = data.cache?.l1_in_memory || {};
+          const l1Hits = l1.hits || 0;
+          const l1Misses = l1.misses || 0;
+          const l1Size = l1.size || 0;
+          const l1Max = l1.maxsize || 500;
+          const l1LastHit = l1.last_hit_time || "None yet";
+          l1HitsEl.textContent = l1Hits;
+          l1MissesEl.textContent = l1Misses;
+          l1SizeEl.textContent = `${l1Size} / ${l1Max}`;
+          l1LastHitEl.textContent = l1LastHit;
+
+          // L2 Cache Stats
+          const l2 = data.cache?.l2_pgvector || {};
+          const l2Hits = l2.total_hits || 0;
+          const l2Entries = l2.cached_entries || 0;
+          const l2LastHit = l2.last_hit_time || "None yet";
+          l2HitsEl.textContent = l2Hits;
+          l2EntriesEl.textContent = l2Entries;
+          l2LastHitEl.textContent = l2LastHit;
+
+          // Overall Cache Rate
+          const totalLookups = (l1Hits + l1Misses) + (l2Hits > 0 ? l2Hits : 0);
           const totalHits = l1Hits + l2Hits;
-          const primary = data.gateway?.primary_model?.split('/').pop() || 'qwen27b';
-          statusText.textContent = `${data.total_vectors || 414} chunks | ${totalHits} cache hits | Gateway: ${primary}`;
+          const overallPct = totalLookups > 0 ? Math.round((totalHits / totalLookups) * 100) : 0;
+          cacheOverallRateEl.textContent = `${overallPct}% Hit Rate`;
+
+          // Gateway Stats
+          const gw = data.gateway || {};
+          const telemetry = gw.telemetry || {};
+          gwPrimaryEl.textContent = (gw.primary_model || "").split("/").slice(-2).join("/");
+          gwFallbackEl.textContent = (gw.fallback_models || []).map(m => m.split("/").slice(-2).join("/")).join(", ") || "None";
+          gwPrimaryCallsEl.textContent = telemetry.primary_model_calls || 0;
+          gwFallbackCallsEl.textContent = telemetry.fallback_model_calls || 0;
+          gwTokensEl.textContent = (telemetry.estimated_tokens_consumed || 0).toLocaleString();
+          gwLastCallEl.textContent = telemetry.last_call_time || "None yet";
+
+          // Top Header Summary
+          const primary = gw.primary_model?.split("/").pop() || "qwen27b";
+          statusText.textContent = `${data.total_vectors || 414} chunks | L1: ${l1Hits} | L2: ${l2Hits} | Gateway: ${primary}`;
         }
       } catch (e) {
         statusText.textContent = "pgvector connected";
       }
     }
     loadStats();
+
+    // Dataflow Stepper UI Helpers
+    function resetDataflow(question) {
+      const now = new Date().toLocaleTimeString();
+      dataflowBadgeEl.textContent = "Running";
+      dataflowBadgeEl.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 animate-pulse";
+
+      // Step 1: Active
+      document.getElementById("dfDot1").className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-slate-900";
+      document.getElementById("dfTime1").textContent = now;
+      document.getElementById("dfDetail1").textContent = `"${question.substring(0, 50)}${question.length > 50 ? '...' : ''}"`;
+
+      // Step 2: Probing
+      document.getElementById("dfDot2").className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse border-2 border-slate-900";
+      document.getElementById("dfTime2").textContent = now;
+      document.getElementById("dfDetail2").textContent = "Checking L1 In-Memory TTL & L2 pgvector...";
+
+      // Reset Steps 3-6 to idle
+      for (let i = 3; i <= 6; i++) {
+        document.getElementById(`dfDot${i}`).className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-slate-700 border-2 border-slate-900";
+        document.getElementById(`dfTime${i}`).textContent = "-";
+      }
+      document.getElementById("dfDetail3").textContent = "Dense (HNSW) + Sparse (BM25) fused via RRF";
+      document.getElementById("dfDetail4").textContent = "Routing to LiteLLM Gateway";
+      document.getElementById("dfDetail5").textContent = "Awaiting generation metrics...";
+      document.getElementById("dfDetail6").textContent = "Cache persistence pending...";
+    }
+
+    function updateDataflowStep(stepNum, status, detail, timestamp, extra = {}) {
+      const dot = document.getElementById(`dfDot${stepNum}`);
+      const detailEl = document.getElementById(`dfDetail${stepNum}`);
+      const timeEl = document.getElementById(`dfTime${stepNum}`);
+      if (!dot || !detailEl || !timeEl) return;
+
+      timeEl.textContent = timestamp || new Date().toLocaleTimeString();
+      detailEl.textContent = detail;
+
+      if (status === "running") {
+        dot.className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse border-2 border-slate-900";
+      } else if (status === "completed" || status === "hit") {
+        dot.className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-slate-900";
+      } else if (status === "miss") {
+        dot.className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-slate-900";
+      } else if (status === "skipped") {
+        dot.className = "absolute -left-5 top-1 w-2.5 h-2.5 rounded-full bg-slate-600 border-2 border-slate-900";
+      }
+    }
+
+    // Activity Log
+    function addActivityEntry(entry) {
+      const emptyMsg = document.getElementById("emptyLogMsg");
+      if (emptyMsg) emptyMsg.remove();
+
+      let badge = "";
+      if (entry.cached) {
+        if (entry.tier === "in_memory") {
+          badge = `<span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-800">⚡ L1 Hit</span>`;
+        } else {
+          badge = `<span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-950 text-purple-300 border border-purple-800">🔍 L2 Hit</span>`;
+        }
+      } else {
+        badge = `<span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-950 text-indigo-300 border border-indigo-800">🤖 LLM Gateway</span>`;
+      }
+
+      const item = document.createElement("div");
+      item.className = "bg-slate-950/70 border border-slate-800/80 rounded-lg p-2 text-xs flex items-center justify-between gap-2 shadow-sm";
+      item.innerHTML = `
+        <div class="truncate flex-1">
+          <div class="text-[11px] font-medium text-slate-200 truncate">${escapeHtml(entry.question)}</div>
+          <div class="text-[10px] text-slate-500 flex items-center gap-2 mt-0.5">
+            <span>${entry.time}</span>
+            <span>&bull;</span>
+            <span>${entry.latency_ms || 0}ms</span>
+            ${entry.tokens ? `<span>&bull;</span><span>~${entry.tokens} tok</span>` : ''}
+          </div>
+        </div>
+        <div>${badge}</div>
+      `;
+
+      activityLogEl.prepend(item);
+    }
+
+    window.clearActivityLog = function () {
+      activityLogEl.innerHTML = `<div class="text-[11px] text-slate-500 text-center py-3" id="emptyLogMsg">No queries logged yet.</div>`;
+    };
 
     // Flush Cache action
     const clearCacheBtn = document.getElementById("clearCacheBtn");
@@ -336,7 +810,7 @@
     // Re-index action
     reindexBtn.addEventListener("click", async () => {
       if (!confirm("Re-index AI-Notes.docx into PostgreSQL? This will re-parse text, tables, and images.")) return;
-      
+
       const icon = document.getElementById("reindexIcon");
       icon.classList.add("animate-spin");
       reindexBtn.disabled = true;
@@ -354,8 +828,8 @@
       }
     });
 
-    // Form submit handler with Real-Time Server-Sent Events (SSE) Streaming
-    chatForm.addEventListener("submit", async function(e) {
+    // Form submit handler with Real-Time Server-Sent Events (SSE) Streaming & Dataflow Trace
+    chatForm.addEventListener("submit", async function (e) {
       e.preventDefault();
       const question = userInput.value.trim();
       if (!question) return;
@@ -364,6 +838,9 @@
       if (welcomeHero && welcomeHero.parentNode) {
         welcomeHero.remove();
       }
+
+      // Initialize Dataflow Stepper on the left side
+      resetDataflow(question);
 
       // Append User Message
       appendMessage("user", question);
@@ -381,6 +858,7 @@
       let textContainer = null;
       let accumulatedText = "";
       let cacheInfo = null;
+      const queryStartTime = performance.now();
 
       try {
         const response = await fetch("/api/ask/stream", {
@@ -413,7 +891,16 @@
             let eventData;
             try { eventData = JSON.parse(dataStr); } catch (e) { continue; }
 
-            if (eventData.type === "status") {
+            // Handle Dataflow Step Events
+            if (eventData.type === "dataflow_step") {
+              updateDataflowStep(
+                eventData.step,
+                eventData.status,
+                eventData.detail,
+                eventData.timestamp,
+                eventData
+              );
+            } else if (eventData.type === "status") {
               thinkingText.textContent = eventData.message || "Processing...";
             } else if (eventData.type === "cache_hit") {
               cacheInfo = { cached: true, cache_tier: eventData.tier, similarity: eventData.similarity };
@@ -429,6 +916,8 @@
               chatMessages.scrollTop = chatMessages.scrollHeight;
             } else if (eventData.type === "done") {
               thinkingIndicator.classList.add("hidden");
+              const totalElapsedMs = Math.round(performance.now() - queryStartTime);
+
               if (!assistantMsgDiv) {
                 appendMessage("assistant", eventData.answer, eventData.images, {
                   cached: eventData.cached,
@@ -437,6 +926,26 @@
               } else if (eventData.images && eventData.images.length > 0) {
                 appendImagesToMsg(assistantMsgDiv, eventData.images);
               }
+
+              // Update dataflow badge & add to activity log
+              if (eventData.cached) {
+                const tierTag = eventData.tier === "in_memory" ? "L1 Hit" : "L2 Hit";
+                dataflowBadgeEl.textContent = `${tierTag} (${eventData.latency_ms || totalElapsedMs}ms)`;
+                dataflowBadgeEl.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+              } else {
+                dataflowBadgeEl.textContent = `Completed (${eventData.latency_ms || totalElapsedMs}ms)`;
+                dataflowBadgeEl.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30";
+              }
+
+              addActivityEntry({
+                question: question,
+                cached: eventData.cached,
+                tier: eventData.tier,
+                tokens: eventData.tokens || 0,
+                latency_ms: eventData.latency_ms || totalElapsedMs,
+                time: new Date().toLocaleTimeString(),
+              });
+
               loadStats();
             } else if (eventData.type === "error") {
               throw new Error(eventData.detail || "Streaming error occurred");
@@ -446,6 +955,8 @@
       } catch (err) {
         thinkingIndicator.classList.add("hidden");
         appendMessage("assistant", `⚠️ **Error:** ${err.message}`);
+        dataflowBadgeEl.textContent = "Error";
+        dataflowBadgeEl.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/20 text-rose-400 border border-rose-500/30";
       } finally {
         thinkingIndicator.classList.add("hidden");
         sendBtn.disabled = false;
@@ -466,7 +977,7 @@
             <div class="mb-2">
               <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 shadow-sm">
                 <i data-lucide="zap" class="w-3 h-3 text-amber-400"></i>
-                <span>Instant Match (In-Memory Cache)</span>
+                <span>⚡ Tier 1 (L1) Instant Match (In-Memory Cache &lt;1ms)</span>
               </span>
             </div>
           `;
@@ -476,7 +987,7 @@
             <div class="mb-2">
               <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-purple-950/80 text-purple-300 border border-purple-800/60 shadow-sm">
                 <i data-lucide="sparkles" class="w-3 h-3 text-purple-400"></i>
-                <span>Semantic Match (pgvector ${pct}% similarity)</span>
+                <span>🔍 Tier 2 (L2) Semantic Match (pgvector ${pct}% similarity)</span>
               </span>
             </div>
           `;
@@ -507,7 +1018,7 @@
         <div class="mt-4 pt-3 border-t border-slate-800">
           <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-400 mb-2.5">
             <i data-lucide="image" class="w-3.5 h-3.5 text-blue-400"></i>
-            <span>Retrieved Architecture Diagrams & Figures (${images.length}):</span>
+            <span>Retrieved Architecture Diagrams &amp; Figures (${images.length}):</span>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             ${images.map(img => `
@@ -555,7 +1066,7 @@
               <div class="mb-2">
                 <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 shadow-sm">
                   <i data-lucide="zap" class="w-3 h-3 text-amber-400"></i>
-                  <span>Instant Match (In-Memory Cache)</span>
+                  <span>⚡ Tier 1 (L1) Instant Match (In-Memory Cache &lt;1ms)</span>
                 </span>
               </div>
             `;
@@ -565,7 +1076,7 @@
               <div class="mb-2">
                 <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-purple-950/80 text-purple-300 border border-purple-800/60 shadow-sm">
                   <i data-lucide="sparkles" class="w-3 h-3 text-purple-400"></i>
-                  <span>Semantic Match (pgvector ${pct}% similarity)</span>
+                  <span>🔍 Tier 2 (L2) Semantic Match (pgvector ${pct}% similarity)</span>
                 </span>
               </div>
             `;
@@ -578,7 +1089,7 @@
             <div class="mt-4 pt-3 border-t border-slate-800">
               <div class="flex items-center gap-1.5 text-xs font-semibold text-slate-400 mb-2.5">
                 <i data-lucide="image" class="w-3.5 h-3.5 text-blue-400"></i>
-                <span>Retrieved Architecture Diagrams & Figures (${images.length}):</span>
+                <span>Retrieved Architecture Diagrams &amp; Figures (${images.length}):</span>
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 ${images.map(img => `
@@ -618,25 +1129,25 @@
     }
 
     // Modal Functions
-    window.openModal = function(imgUrl, title) {
+    window.openModal = function (imgUrl, title) {
       modalImg.src = imgUrl;
       modalTitle.textContent = title;
       modalOpenTab.href = imgUrl;
       imageModal.classList.remove("hidden");
     };
 
-    window.closeModal = function() {
+    window.closeModal = function () {
       imageModal.classList.add("hidden");
       modalImg.src = "";
     };
 
-    imageModal.addEventListener("click", function(e) {
+    imageModal.addEventListener("click", function (e) {
       if (e.target === imageModal) {
         closeModal();
       }
     });
 
-    document.addEventListener("keydown", function(e) {
+    document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && !imageModal.classList.contains("hidden")) {
         closeModal();
       }
@@ -649,4 +1160,5 @@
     }
   </script>
 </body>
+
 </html>

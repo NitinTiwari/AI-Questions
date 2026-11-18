@@ -9,14 +9,14 @@ Table of Contents
 2. PART 2: SYSTEM ARCHITECTURE & AGENTIC FRAMEWORK SELECTION (Q5 - Q8)
 3. PART 3: INGESTION & MULTIMODAL DOCUMENT PROCESSING PIPELINE (Q9 - Q13)
 4. PART 4: STORAGE ENGINE & VECTOR DATABASE DESIGN (POSTGRESQL & PGVECTOR) (Q14 - Q17)
-5. PART 5: MULTI-TIER CACHING ARCHITECTURE (TIER 1 TTL & TIER 2 PGVECTOR SEMANTIC CACHE WITH TIME-TO-CACHE VALIDITY) (Q18 - Q23)
-6. PART 6: UNIFIED LITELLM GATEWAY, ROUTING & FALLBACK DYNAMICS (Q24 - Q27)
-7. PART 7: HYBRID SEARCH (BM25 SPARSE + PGVECTOR DENSE + RECIPROCAL RANK FUSION) & CROSS-ENCODER RE-RANKING (Q28 - Q30)
-8. PART 8: AGENTIC TOOL REASONING, BREADCRUMB CONTEXT & CITATION GROUNDING (Q31 - Q34)
-9. PART 9: REAL-TIME STREAMING (SERVER-SENT EVENTS SSE), FASTAPI BACKEND & EMBEDDED UI (Q35 - Q39)
-10. PART 10: RAGAS EVALUATION FRAMEWORK, QUALITY METRICS & HARNESS (Q40 - Q42)
-11. PART 11: PRODUCTION CLOUD DEPLOYMENT, AZURE APIM/CONTAINER APPS & DEVOPS (Q43 - Q45)
-12. PART 12: ARCHITECTURAL TRADEOFFS, FAILURE MODES & EVOLUTIONARY ROADMAP (Q46 - Q48)
+5. PART 5: MULTI-TIER CACHING ARCHITECTURE (TIER 1 TTL & TIER 2 PGVECTOR SEMANTIC CACHE WITH TIME-TO-CACHE VALIDITY) (Q18 - Q25)
+6. PART 6: UNIFIED LITELLM GATEWAY, ROUTING & FALLBACK DYNAMICS (Q26 - Q29)
+7. PART 7: HYBRID SEARCH (BM25 SPARSE + PGVECTOR DENSE + RECIPROCAL RANK FUSION) & CROSS-ENCODER RE-RANKING (Q30 - Q32)
+8. PART 8: AGENTIC TOOL REASONING, BREADCRUMB CONTEXT & CITATION GROUNDING (Q33 - Q36)
+9. PART 9: REAL-TIME STREAMING (SERVER-SENT EVENTS SSE), FASTAPI BACKEND & EMBEDDED UI (Q37 - Q41)
+10. PART 10: RAGAS EVALUATION FRAMEWORK, QUALITY METRICS & HARNESS (Q42 - Q44)
+11. PART 11: PRODUCTION CLOUD DEPLOYMENT, AZURE APIM/CONTAINER APPS & DEVOPS (Q45 - Q47)
+12. PART 12: ARCHITECTURAL TRADEOFFS, FAILURE MODES & EVOLUTIONARY ROADMAP (Q48 - Q50)
 ----------------------------------------------------------------------------------------------------
 
 
@@ -614,13 +614,18 @@ Developer Answer:
 ```sql
 CREATE TABLE IF NOT EXISTS rag_semantic_cache (
     id SERIAL PRIMARY KEY,
-    query_text TEXT NOT NULL,
+    normalized_query TEXT NOT NULL,
     query_embedding vector(384) NOT NULL,
-    response_text TEXT NOT NULL,
-    sources JSONB DEFAULT '[]'::jsonb,
+    answer TEXT NOT NULL,
     images JSONB DEFAULT '[]'::jsonb,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    hit_count INT DEFAULT 1,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rag_semantic_cache_norm_query 
+ON rag_semantic_cache (normalized_query);
+CREATE INDEX IF NOT EXISTS idx_rag_semantic_cache_vector 
+ON rag_semantic_cache USING hnsw (query_embedding vector_cosine_ops);
 ```
 
 When a new query misses L1, `src/cache.py` generates the 384-dimensional embedding using `all-MiniLM-L6-v2`. It then executes the following parameterized SQL query:
@@ -796,11 +801,157 @@ We introduced configurable Time-To-Cache validity for the L2 pgvector semantic c
    `GET /api/cache/stats` exposes `ttl_seconds` under `l2_semantic_cache`, providing full observability into active cache retention policies."
 
 
+Q24: What exact payload and data structure is stored in the TTL cache across Tier 1 (In-Memory) and Tier 2 (pgvector), and what happens when an entry reaches its expiration?
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer assesses your data modeling rigor, state serialization, memory footprint awareness, and understanding of cache entry expiration lifecycles.
+
+Developer Answer:
+"Both tiers of our caching architecture store complete synthesized responses to bypass downstream agent execution and external LLM inference. However, their physical representations and storage engines differ significantly:
+
+1. Tier 1 (In-Memory `_l1_cache` via `ThreadSafeTTLCache`):
+   - Storage Engine: Python dictionary managed by `cachetools.TTLCache` wrapped in a threading lock.
+   - Key: The normalized query string `norm_q = normalize_query(query)`.
+     (e.g., `'what is difference between sparse and dense in context of ai vector embedding'`)
+   - Value: Python dictionary:
+     ```python
+     {
+         "answer": "Sparse vector representations (like BM25 or TF-IDF) map text into high-dimensional...",
+         "images": [
+             {
+                 "filename": "image_12.png",
+                 "url": "/images/image_12.png",
+                 "caption": "Dense vs Sparse Vector Geometry"
+             }
+         ]
+     }
+     ```
+   - Memory Footprint: Each in-memory entry consumes ~1.2 KB to 2.5 KB. With `CACHE_L1_MAXSIZE = 500`, the maximum working set in RAM is bounded below 1.5 MB, making it negligible for container memory.
+   - Expiration Behavior:
+     - Governed by `CACHE_L1_TTL = 7200` seconds (2 hours).
+     - `cachetools.TTLCache` tracks timestamp intervals per key. Upon reaching 7200 seconds, the entry is automatically evicted during lookup or subsequent write operations.
+
+2. Tier 2 (PostgreSQL `rag_semantic_cache` Table):
+   - Storage Engine: Relational PostgreSQL table with `pgvector` HNSW index.
+   - Exact Table Schema:
+     ```sql
+     CREATE TABLE IF NOT EXISTS rag_semantic_cache (
+         id SERIAL PRIMARY KEY,
+         normalized_query TEXT NOT NULL,
+         query_embedding vector(384) NOT NULL,
+         answer TEXT NOT NULL,
+         images JSONB DEFAULT '[]'::jsonb,
+         hit_count INT DEFAULT 1,
+         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+     );
+     CREATE UNIQUE INDEX IF NOT EXISTS uq_rag_semantic_cache_norm_query 
+     ON rag_semantic_cache (normalized_query);
+     CREATE INDEX IF NOT EXISTS idx_rag_semantic_cache_vector 
+     ON rag_semantic_cache USING hnsw (query_embedding vector_cosine_ops);
+     ```
+   - Payload Fields Explained:
+     - `normalized_query`: Unique text key enabling fast exact-match upsert deduplication (`ON CONFLICT (normalized_query) DO UPDATE`).
+     - `query_embedding`: 384-dimensional dense vector generated via `sentence-transformers/all-MiniLM-L6-v2`.
+     - `answer`: Full synthesized Markdown answer including comparative tables, code blocks, and citations.
+     - `images`: JSONB array storing diagram metadata (`filename`, `url`, `caption`).
+     - `hit_count`: Monotonically increasing counter incremented on every semantic cache hit.
+     - `updated_at`: Timestamp refreshed on initial insertion and every subsequent cache hit.
+   - Expiration Behavior:
+     - Governed by `CACHE_L2_TTL = 86400` seconds (24 hours; `0` = infinite).
+     - Logical Eviction: Queried with temporal predicate `WHERE updated_at >= NOW() - (:ttl * INTERVAL '1 second')`. Expired rows are ignored by PostgreSQL, triggering a fallback to the agent.
+     - Physical Eviction: The system provides `purge_expired_l2_cache()`, executing `DELETE FROM rag_semantic_cache WHERE updated_at < NOW() - (:ttl * INTERVAL '1 second');` to reclaim disk space."
+
+
+Q25: How can a developer or operations engineer inspect, verify, and monitor the TTL cache in real-time? Walk through the API, Database, CLI, and Web UI methods.
+----------------------------------------------------------------------------------------------------
+Context:
+The interviewer tests your practical operational troubleshooting skills—how do you verify what is currently in cache and whether TTL policies are functioning properly in production?
+
+Developer Answer:
+"In production AI architectures, caching must never be an unobservable black box. We provide four distinct methods to inspect and verify the cache state and TTL validity in real-time:
+
+1. Method 1: REST API Telemetry (`GET /api/cache/stats`):
+   - Access via cURL, Postman, browser, or Swagger UI (`http://localhost:8000/docs`):
+     ```bash
+     curl http://localhost:8000/api/cache/stats
+     ```
+   - Live JSON Response:
+     ```json
+     {
+       "cache_enabled": true,
+       "semantic_threshold": 0.92,
+       "l1_in_memory": {
+         "size": 3,
+         "maxsize": 500,
+         "ttl_seconds": 7200,
+         "hits": 14,
+         "misses": 5,
+         "hit_rate": 0.737
+       },
+       "l2_pgvector": {
+         "cached_entries": 8,
+         "total_hits": 18,
+         "ttl_seconds": 86400
+       }
+     }
+     ```
+   - Operational Value: Instantly verifies the active TTLs (7200s for L1, 86400s for L2), total persisted semantic questions, and overall cache hit rate percentage.
+
+2. Method 2: Direct PostgreSQL SQL Inspection (`rag_semantic_cache`):
+   - Connect to the database via `psql`, DBeaver, or Neon Console:
+     ```sql
+     -- Inspect cached queries, hit counts, remaining TTL validity, and payload previews
+     SELECT 
+         id,
+         normalized_query,
+         hit_count,
+         updated_at,
+         ROUND(EXTRACT(EPOCH FROM (NOW() - updated_at))) AS age_in_seconds,
+         CASE 
+             WHEN updated_at >= NOW() - INTERVAL '86400 second' THEN 'ACTIVE (Valid)'
+             ELSE 'EXPIRED'
+         END AS ttl_status,
+         (86400 - ROUND(EXTRACT(EPOCH FROM (NOW() - updated_at)))) AS ttl_remaining_seconds,
+         LEFT(answer, 80) AS answer_preview,
+         images
+     FROM rag_semantic_cache
+     ORDER BY updated_at DESC;
+     ```
+   - Verifies whether specific questions are currently active or expired under the 24-hour TTL window.
+
+3. Method 3: Python Terminal CLI One-Liner:
+   - Check cache statistics directly from the virtual environment:
+     ```bash
+     .question\Scripts\python.exe -c "from src.cache import get_cache_stats; import json; print(json.dumps(get_cache_stats(), indent=2))"
+     ```
+   - Query top persisted questions from the database via Python:
+     ```bash
+     .question\Scripts\python.exe -c "from src.vector_store import get_engine; import sqlalchemy; engine = get_engine(); conn = engine.connect(); print(conn.execute(sqlalchemy.text('SELECT id, normalized_query, hit_count, updated_at FROM rag_semantic_cache;')).fetchall())"
+     ```
+
+4. Method 4: Visual Embedded Chat UI Badges (`static/index.html`):
+   - The user-facing chat UI renders dynamic status badges under each assistant message:
+     - `⚡ L1 Cache Hit (<1ms)`: Green badge indicating an instant in-memory exact match.
+     - `🔍 L2 Semantic Cache Hit (~35ms)`: Blue badge indicating a PostgreSQL vector match ($\ge 0.92$).
+     - `🤖 LLM Agent Reasoning`: Purple badge indicating a cache miss or expired TTL entry requiring fresh agent execution.
+
+5. Administrative Eviction Controls:
+   - Purge Only Expired Entries:
+     ```bash
+     .question\Scripts\python.exe -c "from src.cache import purge_expired_l2_cache; print('Expired rows purged:', purge_expired_l2_cache())"
+     ```
+   - Complete Cache Invalidation (Flush both L1 and L2):
+     ```bash
+     curl -X POST http://localhost:8000/api/cache/clear
+     ```"
+
+
 ====================================================================================================
 PART 6: UNIFIED LITELLM GATEWAY, ROUTING & FALLBACK DYNAMICS
 ====================================================================================================
 
-Q24: Why introduce an embedded LiteLLM Gateway instead of calling ChatGroq or provider APIs directly?
+Q26: Why introduce an embedded LiteLLM Gateway instead of calling ChatGroq or provider APIs directly?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer assesses your architectural decoupling, resilience design, and understanding of enterprise API gateway patterns.
@@ -818,7 +969,7 @@ Why we implemented an embedded LiteLLM Gateway (`src/gateway.py`):
 - Telemetry & Usage Tracking: Tracks total gateway calls, primary vs fallback invocations, and estimated token consumption across the application."
 
 
-Q25: How are primary and fallback models configured, and how does LiteLLM execute the failover chain?
+Q27: How are primary and fallback models configured, and how does LiteLLM execute the failover chain?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your knowledge of high-availability routing, exception interception, and LangChain fallback mechanics.
@@ -873,7 +1024,7 @@ How Failover Executes at Runtime:
 - The user request succeeds without throwing an exception or aborting the chat session."
 
 
-Q26: How does the gateway enforce token caps and prevent runaway tool loops?
+Q28: How does the gateway enforce token caps and prevent runaway tool loops?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer is looking for cost control, denial-of-wallet prevention, and loop boundary conditions in agentic systems.
@@ -891,7 +1042,7 @@ How our Gateway & Agent stack enforces hard boundaries:
   If the agent executes 5 tool interactions without reaching a final answer, `AgentExecutor` terminates the loop and forces the agent to synthesize a response from the context gathered so far."
 
 
-Q27: How is gateway telemetry tracked, and what does `/api/gateway/stats` expose?
+Q29: How is gateway telemetry tracked, and what does `/api/gateway/stats` expose?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your production monitoring setup for LLM gateways.
@@ -928,7 +1079,7 @@ Operational Value:
 PART 7: HYBRID SEARCH (BM25 SPARSE + PGVECTOR DENSE + RECIPROCAL RANK FUSION) & CROSS-ENCODER RE-RANKING
 ====================================================================================================
 
-Q28: Why does pure dense semantic vector search fail on specific technical acronyms and exact keyword searches (e.g., 'sparse vs dense vector embeddings'), and how does Hybrid Search resolve this?
+Q30: Why does pure dense semantic vector search fail on specific technical acronyms and exact keyword searches (e.g., 'sparse vs dense vector embeddings'), and how does Hybrid Search resolve this?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your understanding of retrieval failure modes, vocabulary mismatch, lexical vs semantic representation spaces, and why enterprise RAG requires hybrid search.
@@ -955,7 +1106,7 @@ In `src/hybrid_retriever.py`, we implement a unified `HybridRetriever`:
 3. Fuses both candidate lists using Reciprocal Rank Fusion (RRF), ensuring that passages satisfying both semantic intent and exact keywords rank at the very top."
 
 
-Q29: Walk through the mathematical formulation and implementation of Reciprocal Rank Fusion (RRF) in `src/hybrid_retriever.py`.
+Q31: Walk through the mathematical formulation and implementation of Reciprocal Rank Fusion (RRF) in `src/hybrid_retriever.py`.
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer evaluates your knowledge of rank aggregation algorithms and why linear score combination is an anti-pattern for hybrid retrieval.
@@ -1011,7 +1162,7 @@ Benefits:
 - If a document is only found by BM25 (e.g. an exact acronym), it still achieves a competitive rank."
 
 
-Q30: What is the Cross-Encoder Re-Ranking Stage, how does it differ fundamentally from Bi-Encoder dense retrieval, and how is graceful non-blocking fallback guaranteed?
+Q32: What is the Cross-Encoder Re-Ranking Stage, how does it differ fundamentally from Bi-Encoder dense retrieval, and how is graceful non-blocking fallback guaranteed?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your advanced knowledge of two-stage retrieval architectures, transformer attention mechanics (Bi-Encoder vs Cross-Encoder), and production fault tolerance.
@@ -1065,7 +1216,7 @@ In enterprise systems, external model dependencies must never cause system outag
 PART 8: AGENTIC TOOL REASONING, BREADCRUMB CONTEXT & CITATION GROUNDING
 ====================================================================================================
 
-Q31: How is the agent initialized, and how does it dynamically decide between single-hop and multi-hop retrieval?
+Q33: How is the agent initialized, and how does it dynamically decide between single-hop and multi-hop retrieval?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer assesses your practical knowledge of LangChain's tool-calling agent loop and multi-step reasoning capabilities.
@@ -1097,7 +1248,7 @@ How Dynamic Single-Hop vs Multi-Hop Retrieval Works:
      - Having retrieved both sides of the comparison, it synthesizes an objective, grounded comparative table citing both sections."
 
 
-Q32: How does tool aliasing prevent agent hallucination of non-existent tools like `search_function`?
+Q34: How does tool aliasing prevent agent hallucination of non-existent tools like `search_function`?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer is probing real-world LLM quirk mitigation, specifically tool-name hallucination.
@@ -1120,7 +1271,7 @@ Our Tool Aliasing Guardrail in `src/tools.py`:
 4. If the model emits `search_document`, it executes normally. If it hallucinates `search_function`, the alias catches the call, executes the retrieval, and returns the context without interrupting the user's turn."
 
 
-Q33: How does the system inject document context headers into retrieved passages, and why is this superior to raw text chunks?
+Q35: How does the system inject document context headers into retrieved passages, and why is this superior to raw text chunks?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your understanding of retrieval-augmented prompt engineering and lexical ambiguity resolution.
@@ -1152,7 +1303,7 @@ Why this is superior:
 3. Clean Citations: Enables the agent to fulfill the prompt directive to cite exact sections at the end of every answer."
 
 
-Q34: How are multimodal diagram citations and image metadata formatted for the client UI?
+Q36: How are multimodal diagram citations and image metadata formatted for the client UI?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer evaluates how backend agent reasoning bridges with frontend visual UI components.
@@ -1189,7 +1340,7 @@ Developer Answer:
 
 ====================================================================================================
 PART 9: REAL-TIME STREAMING (SERVER-SENT EVENTS SSE), FASTAPI BACKEND & EMBEDDED UI
-Q35: How is Real-Time Streaming implemented using Server-Sent Events (SSE / `StreamingResponse`), why is SSE chosen over WebSockets, and what is the event lifecycle protocol?
+Q37: How is Real-Time Streaming implemented using Server-Sent Events (SSE / `StreamingResponse`), why is SSE chosen over WebSockets, and what is the event lifecycle protocol?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your knowledge of real-time web protocols, HTTP streaming, user perceived latency (Time-to-First-Token), and frontend streaming consumption.
@@ -1244,7 +1395,7 @@ while (true) {
 Result: Users observe generation beginning in ~300ms, transforming perceived latency from seconds to milliseconds."
 ====================================================================================================
 
-Q36: How is the FastAPI backend architected to achieve sub-300ms startup times?
+Q38: How is the FastAPI backend architected to achieve sub-300ms startup times?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer probes your performance optimization skills regarding Python process boot time and container cold starts.
@@ -1268,7 +1419,7 @@ Our Sub-300ms Lazy Initialization Strategy:
    - Readiness probes ping `GET /api/health`, which can optionally pre-warm the database connection asynchronously without blocking process boot."
 
 
-Q37: Walk through the REST endpoints exposed by `src/api.py` and their request/response contracts.
+Q39: Walk through the REST endpoints exposed by `src/api.py` and their request/response contracts.
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your REST API design standards, error handling, and endpoint documentation.
@@ -1302,32 +1453,43 @@ Developer Answer:
    - Liveness/readiness probe reporting PostgreSQL connectivity, total indexed chunks, and system uptime."
 
 
-Q38: Describe the embedded single-page chat UI architecture (`static/index.html`).
+Q40: Describe the embedded single-page chat UI architecture (`static/index.html`) and how the Left-Side Observability & Real-Time Dataflow Panel is designed.
 ----------------------------------------------------------------------------------------------------
 Context:
-The interviewer evaluates full-stack capability and how frontend user experiences are delivered without heavy Node.js build pipelines.
+The interviewer evaluates full-stack capability, real-time application observability, and how frontend user experiences deliver deep system transparency without heavy Node.js build pipelines.
 
 Developer Answer:
-"To eliminate the complexity of separate React/Vue build pipelines, Node.js container dependencies, and CORS configuration issues, we built an embedded single-page chat application inside `static/index.html` served directly by FastAPI at `/`.
+"To eliminate the complexity of separate React/Vue build pipelines, Node.js container dependencies, and CORS configuration issues, we built an embedded single-page application inside `static/index.html` served directly by FastAPI at `/`.
 
-Frontend Architecture:
-1. Zero-Build Lightweight Stack:
-   - Tailwind CSS (via CDN) for modern, responsive dark/light mode UI styling.
-   - Marked.js (via CDN) for instant client-side rendering of Markdown tables, code blocks, and lists.
-   - Lucide Icons (via CDN) for clean iconography.
-2. Dynamic Chat Bubbles & Cache Badges:
-   - Each assistant response displays a dynamic status badge:
-     - Green Badge: `⚡ L1 Cache Hit (<1ms)`
-     - Blue Badge: `🔍 L2 Semantic Cache Hit (~35ms)`
-     - Purple Badge: `🤖 LLM Agent Reasoning (Groq)`
-3. Image Lightbox Modal:
-   - When an answer references an architecture diagram, the UI renders an image preview card.
-   - Clicking the preview triggers a JavaScript modal lightbox with zoom and full-screen view.
-4. Auto-Scrolling & Error Resilience:
-   - Implements automated scroll-to-bottom, input debouncing, network error toasts, and quick-prompt suggestion chips for instant testing."
+The interface is structured as a responsive split-screen layout pairing deep observability on the left with a conversational chat interface on the right:
+
+1. Left Sidebar: App Observability & Real-Time Dataflow Dashboard:
+   - Separated 2-Tier Cache Telemetry:
+     - Tier 1 (L1) In-Memory Card: Displays hits, misses, memory footprint (size / maxsize), TTL (7,200s), and the exact timestamp of 'When L1 Got Hit'.
+     - Tier 2 (L2) pgvector Semantic Card: Displays hits, total persisted entries in PostgreSQL, cosine threshold (&ge; 0.92), TTL validity (86,400s), and the exact timestamp of 'When L2 Got Hit'.
+     - Overall Cache Hit Rate badge calculated dynamically across total lookups.
+   - LiteLLM Gateway & Token Usage Monitor:
+     - Shows active Primary and Fallback model routing (`qwen3.8-27b` &rarr; `gpt-oss-20b`).
+     - Tracks primary model calls, fallback failovers, cumulative estimated tokens consumed, token cap (1500 tokens), and the exact timestamp of 'When Gateway Called'.
+   - Live Query Dataflow Stepper (Vertical Execution Pipeline):
+     - An animated, stepped execution trace updated in real time via Server-Sent Events (SSE):
+       1. Step 1 (Ingestion): User query text and ingestion timestamp.
+       2. Step 2 (Cache Inspection): Probing L1 MD5 and L2 pgvector cosine distance, lighting up green on Hit (<1ms) or amber on Miss.
+       3. Step 3 (Hybrid Retrieval): Dense pgvector + Sparse BM25 + Reciprocal Rank Fusion ($k=60$) + Cross-Encoder Re-Ranking.
+       4. Step 4 (LiteLLM Gateway): Routing model name, iteration counts, and timeouts.
+       5. Step 5 (Token Telemetry): Real-time prompt tokens, completion tokens, and stream latency.
+       6. Step 6 (Cache Persistence): Confirmation of write-back to L1 Memory and L2 PostgreSQL table.
+   - Recent Query Activity Feed:
+     - Chronological history of recent queries displaying question preview, timestamp, status badge (`⚡ L1 Hit`, `🔍 L2 Hit`, or `🤖 LLM Gateway`), latency in ms, and tokens consumed.
+
+2. Right Main Panel: Real-Time Conversational Interface:
+   - Real-Time SSE Token Streaming: Consumes `/api/ask/stream` via `ReadableStreamDefaultReader` and renders live Markdown token-by-token.
+   - Dynamic Status Badges: Distinct visual pills under each message indicating exact source (`⚡ L1 Match (<1ms)`, `🔍 L2 pgvector Match (~35ms)`, or `🤖 LLM Agent`).
+   - Image Lightbox Modal: Full-screen image zoom modal for inspecting retrieved technical architecture diagrams and flowcharts.
+   - Zero-Build Lightweight Stack: Tailwind CSS (via CDN), Marked.js, DOMPurify, and Lucide icons without npm/Node.js build steps."
 
 
-Q39: How does the API handle CORS, static file mounting, and error handling?
+Q41: How does the API handle CORS, static file mounting, and error handling?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer is looking for production API hardening practices.
@@ -1360,7 +1522,7 @@ Developer Answer:
 PART 10: RAGAS EVALUATION FRAMEWORK, QUALITY METRICS & HARNESS
 ====================================================================================================
 
-Q40: How is the RAGAS evaluation harness implemented in `evaluation/ragas_eval.py`?
+Q42: How is the RAGAS evaluation harness implemented in `evaluation/ragas_eval.py`?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your automated testing methodology, MLOps rigor, and RAG benchmarking pipelines.
@@ -1384,7 +1546,7 @@ Harness Workflow:
    - Writes aggregate mean scores to `evaluation/results/ragas_eval_<timestamp>_summary.csv`."
 
 
-Q41: Explain the four primary RAGAS metrics evaluated and what aspects of the pipeline they validate.
+Q43: Explain the four primary RAGAS metrics evaluated and what aspects of the pipeline they validate.
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer wants a precise mathematical and conceptual understanding of RAGAS metrics.
@@ -1413,7 +1575,7 @@ Developer Answer:
    - Pipeline Target: $\ge 0.85$. Validates chunk size and retrieval $K$ sufficiency."
 
 
-Q42: How does RAGAS evaluation integrate into a CI/CD regression testing pipeline?
+Q44: How does RAGAS evaluation integrate into a CI/CD regression testing pipeline?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer evaluates your DevOps / MLOps engineering practices for production releases.
@@ -1440,7 +1602,7 @@ Our CI/CD Benchmarking Pipeline:
 PART 11: PRODUCTION CLOUD DEPLOYMENT, AZURE APIM/CONTAINER APPS & DEVOPS
 ====================================================================================================
 
-Q43: Describe the recommended production deployment architecture on Azure Cloud.
+Q45: Describe the recommended production deployment architecture on Azure Cloud.
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer is testing your cloud infrastructure architecture skills, specifically deploying containerized AI workloads on Microsoft Azure.
@@ -1483,7 +1645,7 @@ Key Architectural Highlights:
 4. Azure Key Vault: Centralized secret management injecting `DATABASE_URL` and `GROQ_API_KEY` directly into ACA container environment variables."
 
 
-Q44: What startup command and environment configuration are required in Azure App Service / Container Apps?
+Q46: What startup command and environment configuration are required in Azure App Service / Container Apps?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your practical sysadmin and deployment experience on Azure App Service / ACA.
@@ -1514,7 +1676,7 @@ Developer Answer:
    - `CACHE_SEMANTIC_THRESHOLD`: `0.92`"
 
 
-Q45: What are the pros, cons, and trade-offs of deploying behind Azure API Management (APIM) vs directly exposing the container?
+Q47: What are the pros, cons, and trade-offs of deploying behind Azure API Management (APIM) vs directly exposing the container?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer is looking for senior architectural reasoning regarding API gateways, edge security, cost, and latency.
@@ -1540,7 +1702,7 @@ For internal or prototype stages, expose Azure Container Apps directly via its b
 PART 12: ARCHITECTURAL TRADEOFFS, FAILURE MODES & EVOLUTIONARY ROADMAP
 ====================================================================================================
 
-Q46: What are the primary failure modes of this multimodal RAG application, and how are they mitigated?
+Q48: What are the primary failure modes of this multimodal RAG application, and how are they mitigated?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer tests your real-world battle scars: how do you prevent the system from crashing under stress?
@@ -1562,7 +1724,7 @@ Developer Answer:
    - Mitigation: Tool aliasing in `src/tools.py` catches common hallucinations and redirects them to the canonical search implementation."
 
 
-Q47: How does the system handle high concurrency and scaling across multiple worker instances?
+Q49: How does the system handle high concurrency and scaling across multiple worker instances?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer evaluates your understanding of horizontal scaling, stateless architectures, and distributed cache coherence.
@@ -1580,7 +1742,7 @@ Developer Answer:
    - To prevent multiple replicas from overwhelming PostgreSQL, we utilize Neon’s built-in PgBouncer connection pooler (`pooler.c-14.us-east-1.aws.neon.tech`), allowing thousands of concurrent client connections over a compact physical database pool."
 
 
-Q48: What is the evolutionary architectural roadmap for this platform?
+Q50: What is the evolutionary architectural roadmap for this platform?
 ----------------------------------------------------------------------------------------------------
 Context:
 The interviewer wants to assess your forward-looking architectural vision, how you prioritize engineering investments, and your understanding of cutting-edge RAG advancements.
